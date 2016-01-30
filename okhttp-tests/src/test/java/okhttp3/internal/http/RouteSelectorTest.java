@@ -15,17 +15,13 @@
  */
 package okhttp3.internal.http;
 
-import okhttp3.Address;
-import okhttp3.Authenticator;
-import okhttp3.ConnectionSpec;
-import okhttp3.Protocol;
-import okhttp3.Route;
-import okhttp3.internal.RouteDatabase;
-import okhttp3.internal.SslContextBuilder;
-import okhttp3.internal.Util;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.SocketAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,6 +32,15 @@ import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
+import okhttp3.Address;
+import okhttp3.Authenticator;
+import okhttp3.ConnectionSpec;
+import okhttp3.FakeDns;
+import okhttp3.Protocol;
+import okhttp3.Route;
+import okhttp3.internal.RouteDatabase;
+import okhttp3.internal.SslContextBuilder;
+import okhttp3.internal.Util;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -67,7 +72,7 @@ public final class RouteSelectorTest {
   private final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
   private HostnameVerifier hostnameVerifier;
 
-  private final Authenticator authenticator = AuthenticatorAdapter.INSTANCE;
+  private final Authenticator authenticator = Authenticator.NONE;
   private final List<Protocol> protocols = Arrays.asList(Protocol.HTTP_1_1);
   private final FakeDns dns = new FakeDns();
   private final RecordingProxySelector proxySelector = new RecordingProxySelector();
@@ -144,12 +149,21 @@ public final class RouteSelectorTest {
   }
 
   @Test public void proxySelectorReturnsNull() throws Exception {
-    Address address = httpAddress();
+    ProxySelector nullProxySelector = new ProxySelector() {
+      @Override public List<Proxy> select(URI uri) {
+        assertEquals(uriHost, uri.getHost());
+        return null;
+      }
 
-    proxySelector.proxies = null;
+      @Override public void connectFailed(
+          URI uri, SocketAddress socketAddress, IOException e) {
+        throw new AssertionError();
+      }
+    };
+
+    Address address = new Address(uriHost, uriPort, dns, socketFactory, null, null, null,
+        authenticator, null, protocols, connectionSpecs, nullProxySelector);
     RouteSelector routeSelector = new RouteSelector(address, routeDatabase);
-    proxySelector.assertRequests(address.url().uri());
-
     assertTrue(routeSelector.hasNext());
     dns.addresses(makeFakeAddresses(255, 1));
     assertRoute(routeSelector.next(), address, NO_PROXY, dns.address(0), uriPort);
@@ -322,10 +336,10 @@ public final class RouteSelectorTest {
     socketAddress = new InetSocketAddress(InetAddress.getByName("localhost"), 1234);
     assertEquals("127.0.0.1", RouteSelector.getHostString(socketAddress));
     socketAddress = new InetSocketAddress(
-        InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), 1234);
+        InetAddress.getByAddress(new byte[] {127, 0, 0, 1}), 1234);
     assertEquals("127.0.0.1", RouteSelector.getHostString(socketAddress));
     socketAddress = new InetSocketAddress(
-        InetAddress.getByAddress("foobar", new byte[] { 127, 0, 0, 1 }), 1234);
+        InetAddress.getByAddress("foobar", new byte[] {127, 0, 0, 1}), 1234);
     assertEquals("127.0.0.1", RouteSelector.getHostString(socketAddress));
   }
 
@@ -353,7 +367,7 @@ public final class RouteSelectorTest {
       List<InetAddress> result = new ArrayList<>();
       for (int i = 0; i < count; i++) {
         result.add(InetAddress.getByAddress(
-            new byte[] { (byte) prefix, (byte) 0, (byte) 0, (byte) i }));
+            new byte[] {(byte) prefix, (byte) 0, (byte) 0, (byte) i}));
       }
       return result;
     } catch (UnknownHostException e) {

@@ -15,8 +15,6 @@
  */
 package okhttp3;
 
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import java.io.IOException;
 import java.net.Proxy;
 import java.net.ProxySelector;
@@ -24,6 +22,8 @@ import java.net.SocketAddress;
 import java.net.URI;
 import java.util.Collections;
 import java.util.List;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -48,8 +48,9 @@ public final class SocksProxyTest {
     server.enqueue(new MockResponse().setBody("abc"));
     server.enqueue(new MockResponse().setBody("def"));
 
-    OkHttpClient client = new OkHttpClient()
-        .setProxy(socksProxy.proxy());
+    OkHttpClient client = new OkHttpClient.Builder()
+        .proxy(socksProxy.proxy())
+        .build();
 
     Request request1 = new Request.Builder().url(server.url("/")).build();
     Response response1 = client.newCall(request1).execute();
@@ -76,8 +77,9 @@ public final class SocksProxyTest {
       }
     };
 
-    OkHttpClient client = new OkHttpClient()
-        .setProxySelector(proxySelector);
+    OkHttpClient client = new OkHttpClient.Builder()
+        .proxySelector(proxySelector)
+        .build();
 
     Request request = new Request.Builder().url(server.url("/")).build();
     Response response = client.newCall(request).execute();
@@ -90,8 +92,9 @@ public final class SocksProxyTest {
     // This testcase will fail if the target is resolved locally instead of through the proxy.
     server.enqueue(new MockResponse().setBody("abc"));
 
-    OkHttpClient client = new OkHttpClient()
-        .setProxy(socksProxy.proxy());
+    OkHttpClient client = new OkHttpClient.Builder()
+        .proxy(socksProxy.proxy())
+        .build();
 
     HttpUrl url = server.url("/")
         .newBuilder()

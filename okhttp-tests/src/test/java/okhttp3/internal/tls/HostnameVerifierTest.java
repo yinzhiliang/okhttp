@@ -17,13 +17,14 @@
 
 package okhttp3.internal.tls;
 
-import okhttp3.internal.Util;
 import java.io.ByteArrayInputStream;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLSession;
 import javax.security.auth.x500.X500Principal;
+import okhttp3.FakeSSLSession;
+import okhttp3.internal.Util;
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -32,8 +33,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Tests for our hostname verifier. Most of these tests are from AOSP, which
- * itself includes tests from the Apache HTTP Client test suite.
+ * Tests for our hostname verifier. Most of these tests are from AOSP, which itself includes tests
+ * from the Apache HTTP Client test suite.
  */
 public final class HostnameVerifierTest {
   private HostnameVerifier verifier = OkHostnameVerifier.INSTANCE;
@@ -144,9 +145,9 @@ public final class HostnameVerifierTest {
   }
 
   /**
-   * Ignored due to incompatibilities between Android and Java on how non-ASCII
-   * subject alt names are parsed. Android fails to parse these, which means we
-   * fall back to the CN. The RI does parse them, so the CN is unused.
+   * Ignored due to incompatibilities between Android and Java on how non-ASCII subject alt names
+   * are parsed. Android fails to parse these, which means we fall back to the CN. The RI does parse
+   * them, so the CN is unused.
    */
   @Test @Ignore public void verifyNonAsciiSubjectAlt() throws Exception {
     // CN=foo.com, subjectAlt=bar.com, subjectAlt=&#x82b1;&#x5b50;.co.jp
@@ -329,9 +330,9 @@ public final class HostnameVerifierTest {
   }
 
   /**
-   * Ignored due to incompatibilities between Android and Java on how non-ASCII
-   * subject alt names are parsed. Android fails to parse these, which means we
-   * fall back to the CN. The RI does parse them, so the CN is unused.
+   * Ignored due to incompatibilities between Android and Java on how non-ASCII subject alt names
+   * are parsed. Android fails to parse these, which means we fall back to the CN. The RI does parse
+   * them, so the CN is unused.
    */
   @Test @Ignore public void testWilcardNonAsciiSubjectAlt() throws Exception {
     // CN=*.foo.com, subjectAlt=*.bar.com, subjectAlt=*.&#x82b1;&#x5b50;.co.jp
@@ -432,10 +433,9 @@ public final class HostnameVerifierTest {
   }
 
   /**
-   * Earlier implementations of Android's hostname verifier required that
-   * wildcard names wouldn't match "*.com" or similar. This was a nonstandard
-   * check that we've since dropped. It is the CA's responsibility to not hand
-   * out certificates that match so broadly.
+   * Earlier implementations of Android's hostname verifier required that wildcard names wouldn't
+   * match "*.com" or similar. This was a nonstandard check that we've since dropped. It is the CA's
+   * responsibility to not hand out certificates that match so broadly.
    */
   @Test public void wildcardsDoesNotNeedTwoDots() throws Exception {
     // openssl req -x509 -nodes -days 36500 -subj '/CN=*.com' -newkey rsa:512 -out cert.pem
@@ -518,28 +518,28 @@ public final class HostnameVerifierTest {
 
   @Test public void verifyAsIpAddress() {
     // IPv4
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("127.0.0.1"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("1.2.3.4"));
+    assertTrue(Util.verifyAsIpAddress("127.0.0.1"));
+    assertTrue(Util.verifyAsIpAddress("1.2.3.4"));
 
     // IPv6
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("::1"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("2001:db8::1"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("::192.168.0.1"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("::ffff:192.168.0.1"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("FEDC:BA98:7654:3210:FEDC:BA98:7654:3210"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("1080:0:0:0:8:800:200C:417A"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("1080::8:800:200C:417A"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("FF01::101"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("0:0:0:0:0:0:13.1.68.3"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("0:0:0:0:0:FFFF:129.144.52.38"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("::13.1.68.3"));
-    assertTrue(OkHostnameVerifier.verifyAsIpAddress("::FFFF:129.144.52.38"));
+    assertTrue(Util.verifyAsIpAddress("::1"));
+    assertTrue(Util.verifyAsIpAddress("2001:db8::1"));
+    assertTrue(Util.verifyAsIpAddress("::192.168.0.1"));
+    assertTrue(Util.verifyAsIpAddress("::ffff:192.168.0.1"));
+    assertTrue(Util.verifyAsIpAddress("FEDC:BA98:7654:3210:FEDC:BA98:7654:3210"));
+    assertTrue(Util.verifyAsIpAddress("1080:0:0:0:8:800:200C:417A"));
+    assertTrue(Util.verifyAsIpAddress("1080::8:800:200C:417A"));
+    assertTrue(Util.verifyAsIpAddress("FF01::101"));
+    assertTrue(Util.verifyAsIpAddress("0:0:0:0:0:0:13.1.68.3"));
+    assertTrue(Util.verifyAsIpAddress("0:0:0:0:0:FFFF:129.144.52.38"));
+    assertTrue(Util.verifyAsIpAddress("::13.1.68.3"));
+    assertTrue(Util.verifyAsIpAddress("::FFFF:129.144.52.38"));
 
     // Hostnames
-    assertFalse(OkHostnameVerifier.verifyAsIpAddress("go"));
-    assertFalse(OkHostnameVerifier.verifyAsIpAddress("localhost"));
-    assertFalse(OkHostnameVerifier.verifyAsIpAddress("squareup.com"));
-    assertFalse(OkHostnameVerifier.verifyAsIpAddress("www.nintendo.co.jp"));
+    assertFalse(Util.verifyAsIpAddress("go"));
+    assertFalse(Util.verifyAsIpAddress("localhost"));
+    assertFalse(Util.verifyAsIpAddress("squareup.com"));
+    assertFalse(Util.verifyAsIpAddress("www.nintendo.co.jp"));
   }
 
   private X509Certificate certificate(String certificate) throws Exception {

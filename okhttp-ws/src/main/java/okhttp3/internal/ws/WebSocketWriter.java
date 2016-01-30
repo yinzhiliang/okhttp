@@ -34,14 +34,15 @@ import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_LONG;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_SHORT;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_SHORT_MAX;
 import static okhttp3.internal.ws.WebSocketProtocol.toggleMask;
+import static okhttp3.internal.ws.WebSocketProtocol.validateCloseCode;
 
 /**
  * An <a href="http://tools.ietf.org/html/rfc6455">RFC 6455</a>-compatible WebSocket frame writer.
- * <p>
- * This class is partially thread safe. Only a single "main" thread should be sending messages via
- * calls to {@link #newMessageSink}, {@link #writePing}, or {@link #writeClose}. Other threads may
- * call {@link #writePing}, {@link #writePong}, or {@link #writeClose} which will interleave on the
- * wire with frames from the "main" sending thread.
+ *
+ * <p>This class is partially thread safe. Only a single "main" thread should be sending messages
+ * via calls to {@link #newMessageSink}, {@link #writePing}, or {@link #writeClose}. Other threads
+ * may call {@link #writePing}, {@link #writePong}, or {@link #writeClose} which will interleave on
+ * the wire with frames from the "main" sending thread.
  */
 public final class WebSocketWriter {
   private final boolean isClient;
@@ -89,16 +90,15 @@ public final class WebSocketWriter {
   /**
    * Send a close frame with optional code and reason.
    *
-   * @param code Status code as defined by
-   * <a href="http://tools.ietf.org/html/rfc6455#section-7.4">Section 7.4 of RFC 6455</a> or
-   * {@code 0}.
+   * @param code Status code as defined by <a
+   * href="http://tools.ietf.org/html/rfc6455#section-7.4">Section 7.4 of RFC 6455</a> or {@code 0}.
    * @param reason Reason for shutting down or {@code null}.
    */
   public void writeClose(int code, String reason) throws IOException {
     Buffer payload = null;
     if (code != 0 || reason != null) {
-      if (code != 0 && (code < 1000 || code >= 5000)) {
-        throw new IllegalArgumentException("Code must be in range [1000,5000).");
+      if (code != 0) {
+        validateCloseCode(code, true);
       }
       payload = new Buffer();
       payload.writeShort(code);

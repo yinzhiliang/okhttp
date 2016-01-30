@@ -15,6 +15,8 @@
  */
 package okhttp3.internal.ws;
 
+import java.net.ProtocolException;
+
 public final class WebSocketProtocol {
   /** Magic value which must be appended to the key in a response header. */
   public static final String ACCEPT_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -45,17 +47,15 @@ public final class WebSocketProtocol {
   static final int OPCODE_FLAG_CONTROL = 0b00001000;
 
   /**
-   * Byte 1 flag for whether the payload data is masked.
-   * <p>
-   * If this flag is set, the next four bytes represent the mask key. These bytes appear after
-   * any additional bytes specified by {@link #B1_MASK_LENGTH}.
+   * Byte 1 flag for whether the payload data is masked. <p> If this flag is set, the next four
+   * bytes represent the mask key. These bytes appear after any additional bytes specified by {@link
+   * #B1_MASK_LENGTH}.
    */
   static final int B1_FLAG_MASK = 0b10000000;
   /**
-   * Byte 1 mask for the payload length.
-   * <p>
-   * If this value is {@link #PAYLOAD_SHORT}, the next two bytes represent the length.
-   * If this value is {@link #PAYLOAD_LONG}, the next eight bytes represent the length.
+   * Byte 1 mask for the payload length. <p> If this value is {@link #PAYLOAD_SHORT}, the next two
+   * bytes represent the length. If this value is {@link #PAYLOAD_LONG}, the next eight bytes
+   * represent the length.
    */
   static final int B1_MASK_LENGTH = 0b01111111;
 
@@ -89,6 +89,21 @@ public final class WebSocketProtocol {
     for (int i = 0; i < byteCount; i++, frameBytesRead++) {
       int keyIndex = (int) (frameBytesRead % keyLength);
       buffer[i] = (byte) (buffer[i] ^ key[keyIndex]);
+    }
+  }
+
+  static void validateCloseCode(int code, boolean argument) throws ProtocolException {
+    String message = null;
+    if (code < 1000 || code >= 5000) {
+      message = "Code must be in range [1000,5000): " + code;
+    } else if ((code >= 1004 && code <= 1006) || (code >= 1012 && code <= 2999)) {
+      message = "Code " + code + " is reserved and may not be used.";
+    }
+    if (message != null) {
+      if (argument) {
+        throw new IllegalArgumentException(message);
+      }
+      throw new ProtocolException(message);
     }
   }
 

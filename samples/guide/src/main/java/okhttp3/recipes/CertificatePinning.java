@@ -15,25 +15,26 @@
  */
 package okhttp3.recipes;
 
+import java.io.IOException;
+import java.security.cert.Certificate;
 import okhttp3.CertificatePinner;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import java.io.IOException;
-import java.security.cert.Certificate;
 
 public final class CertificatePinning {
   private final OkHttpClient client;
 
   public CertificatePinning() {
-    client = new OkHttpClient();
-    client.setCertificatePinner(
-        new CertificatePinner.Builder()
-            .add("publicobject.com", "sha1/DmxUShsZuNiqPQsX2Oi9uv2sCnw=")
-            .add("publicobject.com", "sha1/SXxoaOSEzPC6BgGmxAt/EAcsajw=")
-            .add("publicobject.com", "sha1/blhOM3W9V/bVQhsWAcLYwPU6n24=")
-            .add("publicobject.com", "sha1/T5x9IXmcrQ7YuQxXnxoCmeeQ84c=")
-            .build());
+    client = new OkHttpClient.Builder()
+        .certificatePinner(
+            new CertificatePinner.Builder()
+                .add("publicobject.com", "sha1/DmxUShsZuNiqPQsX2Oi9uv2sCnw=")
+                .add("publicobject.com", "sha1/SXxoaOSEzPC6BgGmxAt/EAcsajw=")
+                .add("publicobject.com", "sha1/blhOM3W9V/bVQhsWAcLYwPU6n24=")
+                .add("publicobject.com", "sha1/T5x9IXmcrQ7YuQxXnxoCmeeQ84c=")
+                .build())
+        .build();
   }
 
   public void run() throws Exception {

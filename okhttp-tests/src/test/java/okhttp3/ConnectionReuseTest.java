@@ -15,27 +15,30 @@
  */
 package okhttp3;
 
+import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSocketFactory;
 import okhttp3.internal.SslContextBuilder;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.SocketPolicy;
-import okhttp3.testing.RecordingHostnameVerifier;
-import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
-import javax.net.ssl.SSLContext;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestRule;
 import org.junit.rules.Timeout;
 
+import static okhttp3.TestUtil.defaultClient;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 public final class ConnectionReuseTest {
   @Rule public final TestRule timeout = new Timeout(30_000);
   @Rule public final MockWebServer server = new MockWebServer();
 
   private SSLContext sslContext = SslContextBuilder.localhost();
-  private OkHttpClient client = new OkHttpClient();
+  private OkHttpClient client = defaultClient();
 
   @Test public void connectionsAreReused() throws Exception {
     server.enqueue(new MockResponse().setBody("a"));
@@ -101,7 +104,9 @@ public final class ConnectionReuseTest {
   }
 
   @Test public void connectionsAreNotReusedIfPoolIsSizeZero() throws Exception {
-    client.setConnectionPool(new ConnectionPool(0, 5000));
+    client = client.newBuilder()
+        .connectionPool(new ConnectionPool(0, 5, TimeUnit.SECONDS))
+        .build();
     server.enqueue(new MockResponse().setBody("a"));
     server.enqueue(new MockResponse().setBody("b"));
 
@@ -112,7 +117,9 @@ public final class ConnectionReuseTest {
   }
 
   @Test public void connectionsReusedWithRedirectEvenIfPoolIsSizeZero() throws Exception {
-    client.setConnectionPool(new ConnectionPool(0, 5000));
+    client = client.newBuilder()
+        .connectionPool(new ConnectionPool(0, 5, TimeUnit.SECONDS))
+        .build();
     server.enqueue(new MockResponse()
         .setResponseCode(301)
         .addHeader("Location: /b")
@@ -129,7 +136,9 @@ public final class ConnectionReuseTest {
   }
 
   @Test public void connectionsNotReusedWithRedirectIfDiscardingResponseIsSlow() throws Exception {
-    client.setConnectionPool(new ConnectionPool(0, 5000));
+    client = client.newBuilder()
+        .connectionPool(new ConnectionPool(0, 5, TimeUnit.SECONDS))
+        .build();
     server.enqueue(new MockResponse()
         .setResponseCode(301)
         .addHeader("Location: /b")
@@ -206,7 +215,9 @@ public final class ConnectionReuseTest {
     server.enqueue(new MockResponse().setBody("a"));
     server.enqueue(new MockResponse().setBody("b"));
 
-    client.setConnectionPool(new ConnectionPool(5, 250, TimeUnit.MILLISECONDS));
+    client = client.newBuilder()
+        .connectionPool(new ConnectionPool(5, 250, TimeUnit.MILLISECONDS))
+        .build();
     Request request = new Request.Builder()
         .url(server.url("/"))
         .build();
@@ -224,12 +235,74 @@ public final class ConnectionReuseTest {
     assertEquals(0, server.takeRequest().getSequenceNumber());
   }
 
+  @Test public void connectionsAreNotReusedIfSslSocketFactoryChanges() throws Exception {
+    enableHttps();
+    server.enqueue(new MockResponse());
+    server.enqueue(new MockResponse());
+
+    Request request = new Request.Builder()
+        .url(server.url("/"))
+        .build();
+
+    Response response = client.newCall(request).execute();
+    response.body().close();
+
+    // This client shares a connection pool but has a different SSL socket factory.
+    SSLContext sslContext2 = SSLContext.getInstance("TLS");
+    sslContext2.init(null, null, null);
+    SSLSocketFactory sslSocketFactory2 = sslContext2.getSocketFactory();
+    OkHttpClient anotherClient = client.newBuilder()
+        .sslSocketFactory(sslSocketFactory2)
+        .build();
+
+    // This client fails to connect because the new SSL socket factory refuses.
+    try {
+      anotherClient.newCall(request).execute();
+      fail();
+    } catch (SSLException expected) {
+    }
+  }
+
+  @Test public void connectionsAreNotReusedIfHostnameVerifierChanges() throws Exception {
+    enableHttps();
+    server.enqueue(new MockResponse());
+    server.enqueue(new MockResponse());
+
+    Request request = new Request.Builder()
+        .url(server.url("/"))
+        .build();
+
+    Response response1 = client.newCall(request).execute();
+    response1.body().close();
+
+    // This client shares a connection pool but has a different SSL socket factory.
+    OkHttpClient anotherClient = client.newBuilder()
+        .hostnameVerifier(new RecordingHostnameVerifier())
+        .build();
+
+    Response response2 = anotherClient.newCall(request).execute();
+    response2.body().close();
+
+    assertEquals(0, server.takeRequest().getSequenceNumber());
+    assertEquals(0, server.takeRequest().getSequenceNumber());
+  }
+
+  private void enableHttps() {
+    enableHttpsAndAlpn(Protocol.HTTP_1_1);
+  }
+
   private void enableHttp2() {
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(new RecordingHostnameVerifier());
-    client.setProtocols(Arrays.asList(Protocol.HTTP_2, Protocol.HTTP_1_1));
+    enableHttpsAndAlpn(Protocol.HTTP_2, Protocol.HTTP_1_1);
+  }
+
+  private void enableHttpsAndAlpn(Protocol... protocols) {
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(new RecordingHostnameVerifier())
+        .protocols(Arrays.asList(protocols))
+        .build();
     server.useHttps(sslContext.getSocketFactory(), false);
-    server.setProtocols(client.getProtocols());
+    server.setProtocols(client.protocols());
   }
 
   private void assertConnectionReused(Request... requests) throws Exception {

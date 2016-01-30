@@ -15,7 +15,6 @@
  */
 package okhttp3;
 
-import java.net.IDN;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -27,9 +26,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import okio.Buffer;
+
+import static okhttp3.internal.Util.delimiterOffset;
+import static okhttp3.internal.Util.domainToAscii;
+import static okhttp3.internal.Util.skipLeadingAsciiWhitespace;
+import static okhttp3.internal.Util.skipTrailingAsciiWhitespace;
 
 /**
  * A uniform resource locator (URL) with a scheme of either {@code http} or {@code https}. Use this
@@ -84,58 +87,67 @@ import okio.Buffer;
  * A URL has several components.
  *
  * <h4>Scheme</h4>
- * Sometimes referred to as <i>protocol</i>, A URL's scheme describes what mechanism should be used
- * to retrieve the resource. Although URLs have many schemes ({@code mailto}, {@code file}, {@code
- * ftp}), this class only supports {@code http} and {@code https}. Use {@link URI java.net.URI} for
- * URLs with arbitrary schemes.
+ *
+ * <p>Sometimes referred to as <i>protocol</i>, A URL's scheme describes what mechanism should be
+ * used to retrieve the resource. Although URLs have many schemes ({@code mailto}, {@code file},
+ * {@code ftp}), this class only supports {@code http} and {@code https}. Use {@link URI
+ * java.net.URI} for URLs with arbitrary schemes.
  *
  * <h4>Username and Password</h4>
- * Username and password are either present, or the empty string {@code ""} if absent. This class
+ *
+ * <p>Username and password are either present, or the empty string {@code ""} if absent. This class
  * offers no mechanism to differentiate empty from absent. Neither of these components are popular
  * in practice. Typically HTTP applications use other mechanisms for user identification and
  * authentication.
  *
  * <h4>Host</h4>
- * The host identifies the webserver that serves the URL's resource. It is either a hostname like
+ *
+ * <p>The host identifies the webserver that serves the URL's resource. It is either a hostname like
  * {@code square.com} or {@code localhost}, an IPv4 address like {@code 192.168.0.1}, or an IPv6
  * address like {@code ::1}.
  *
  * <p>Usually a webserver is reachable with multiple identifiers: its IP addresses, registered
  * domain names, and even {@code localhost} when connecting from the server itself. Each of a
- * webserver's names is a distinct URL and they are not interchangeable. For example, even if
- * {@code http://square.github.io/dagger} and {@code http://google.github.io/dagger} are served by
- * the same IP address, the two URLs identify different resources.
+ * webserver's names is a distinct URL and they are not interchangeable. For example, even if {@code
+ * http://square.github.io/dagger} and {@code http://google.github.io/dagger} are served by the same
+ * IP address, the two URLs identify different resources.
  *
  * <h4>Port</h4>
- * The port used to connect to the webserver. By default this is 80 for HTTP and 443 for HTTPS. This
- * class never returns -1 for the port: if no port is explicitly specified in the URL then the
+ *
+ * <p>The port used to connect to the webserver. By default this is 80 for HTTP and 443 for HTTPS.
+ * This class never returns -1 for the port: if no port is explicitly specified in the URL then the
  * scheme's default is used.
  *
  * <h4>Path</h4>
- * The path identifies a specific resource on the host. Paths have a hierarchical structure like
+ *
+ * <p>The path identifies a specific resource on the host. Paths have a hierarchical structure like
  * "/square/okhttp/issues/1486". Each path segment is prefixed with "/". This class offers methods
  * to compose and decompose paths by segment. If a path's last segment is the empty string, then the
  * path ends with "/". This class always builds non-empty paths: if the path is omitted it defaults
  * to "/", which is a path whose only segment is the empty string.
  *
  * <h4>Query</h4>
- * The query is optional: it can be null, empty, or non-empty. For many HTTP URLs the query string
- * is subdivided into a collection of name-value parameters. This class offers methods to set the
- * query as the single string, or as individual name-value parameters. With name-value parameters
- * the values are optional and names may be repeated.
+ *
+ * <p>The query is optional: it can be null, empty, or non-empty. For many HTTP URLs the query
+ * string is subdivided into a collection of name-value parameters. This class offers methods to set
+ * the query as the single string, or as individual name-value parameters. With name-value
+ * parameters the values are optional and names may be repeated.
  *
  * <h4>Fragment</h4>
- * The fragment is optional: it can be null, empty, or non-empty. Unlike host, port, path, and query
- * the fragment is not sent to the webserver: it's private to the client.
+ *
+ * <p>The fragment is optional: it can be null, empty, or non-empty. Unlike host, port, path, and
+ * query the fragment is not sent to the webserver: it's private to the client.
  *
  * <h3>Encoding</h3>
- * Each component must be encoded before it is embedded in the complete URL. As we saw above, the
+ *
+ * <p>Each component must be encoded before it is embedded in the complete URL. As we saw above, the
  * string {@code cute #puppies} is encoded as {@code cute%20%23puppies} when used as a query
  * parameter value.
  *
  * <h4>Percent encoding</h4>
- * Percent encoding replaces a character (like {@code \ud83c\udf69}) with its UTF-8 hex bytes (like
- * {@code %F0%9F%8D%A9}). This approach works for whitespace characters, control characters,
+ *
+ * <p>Percent encoding replaces a character (like {@code \ud83c\udf69}) with its UTF-8 hex bytes
+ * (like {@code %F0%9F%8D%A9}). This approach works for whitespace characters, control characters,
  * non-ASCII characters, and characters that already have another meaning in a particular context.
  *
  * <p>Percent encoding is used in every URL component except for the hostname. But the set of
@@ -161,11 +173,12 @@ import okio.Buffer;
  * the offending characters.
  *
  * <h4>IDNA Mapping and Punycode encoding</h4>
- * Hostnames have different requirements and use a different encoding scheme. It consists of IDNA
+ *
+ * <p>Hostnames have different requirements and use a different encoding scheme. It consists of IDNA
  * mapping and Punycode encoding.
  *
- * <p>In order to avoid confusion and discourage phishing attacks,
- * <a href="http://www.unicode.org/reports/tr46/#ToASCII">IDNA Mapping</a> transforms names to avoid
+ * <p>In order to avoid confusion and discourage phishing attacks, <a
+ * href="http://www.unicode.org/reports/tr46/#ToASCII">IDNA Mapping</a> transforms names to avoid
  * confusing characters. This includes basic case folding: transforming shouting {@code SQUARE.COM}
  * into cool and casual {@code square.com}. It also handles more exotic characters. For example, the
  * Unicode trademark sign (™) could be confused for the letters "TM" in {@code http://ho™mail.com}.
@@ -174,21 +187,25 @@ import okio.Buffer;
  * not mapped and cannot be used in a hostname.
  *
  * <p><a href="http://ietf.org/rfc/rfc3492.txt">Punycode</a> converts a Unicode string to an ASCII
- * string to make international domain names work everywhere. For example, "σ" encodes as
- * "xn--4xa". The encoded string is not human readable, but can be used with classes like {@link
- * InetAddress} to establish connections.
+ * string to make international domain names work everywhere. For example, "σ" encodes as "xn--4xa".
+ * The encoded string is not human readable, but can be used with classes like {@link InetAddress}
+ * to establish connections.
  *
  * <h3>Why another URL model?</h3>
- * Java includes both {@link URL java.net.URL} and {@link URI java.net.URI}. We offer a new URL
+ *
+ * <p>Java includes both {@link URL java.net.URL} and {@link URI java.net.URI}. We offer a new URL
  * model to address problems that the others don't.
  *
  * <h4>Different URLs should be different</h4>
- * Although they have different content, {@code java.net.URL} considers the following two URLs
+ *
+ * <p>Although they have different content, {@code java.net.URL} considers the following two URLs
  * equal, and the {@link Object#equals equals()} method between them returns true:
+ *
  * <ul>
  *   <li>http://square.github.io/
  *   <li>http://google.github.io/
  * </ul>
+ *
  * This is because those two hosts share the same IP address. This is an old, bad design decision
  * that makes {@code java.net.URL} unusable for many things. It shouldn't be used as a {@link
  * java.util.Map Map} key or in a {@link Set}. Doing so is both inefficient because equality may
@@ -196,11 +213,14 @@ import okio.Buffer;
  * hosted.
  *
  * <h4>Equal URLs should be equal</h4>
- * These two URLs are semantically identical, but {@code java.net.URI} disagrees:
+ *
+ * <p>These two URLs are semantically identical, but {@code java.net.URI} disagrees:
+ *
  * <ul>
  *   <li>http://host:80/
  *   <li>http://host
  * </ul>
+ *
  * Both the unnecessary port specification ({@code :80}) and the absent trailing slash ({@code /})
  * cause URI to bucket the two URLs separately. This harms URI's usefulness in collections. Any
  * application that stores information-per-URL will need to either canonicalize manually, or suffer
@@ -226,21 +246,24 @@ import okio.Buffer;
  * }</pre>
  *
  * <h4>If it works on the web, it should work in your application</h4>
- * The {@code java.net.URI} class is strict around what URLs it accepts. It rejects URLs like
+ *
+ * <p>The {@code java.net.URI} class is strict around what URLs it accepts. It rejects URLs like
  * "http://example.com/abc|def" because the '|' character is unsupported. This class is more
  * forgiving: it will automatically percent-encode the '|', yielding "http://example.com/abc%7Cdef".
  * This kind behavior is consistent with web browsers. {@code HttpUrl} prefers consistency with
  * major web browsers over consistency with obsolete specifications.
  *
  * <h4>Paths and Queries should decompose</h4>
- * Neither of the built-in URL models offer direct access to path segments or query parameters.
+ *
+ * <p>Neither of the built-in URL models offer direct access to path segments or query parameters.
  * Manually using {@code StringBuilder} to assemble these components is cumbersome: do '+'
  * characters get silently replaced with spaces? If a query parameter contains a '&amp;', does that
  * get escaped? By offering methods to read and write individual query parameters directly,
  * application developers are saved from the hassles of encoding and decoding.
  *
  * <h4>Plus a modern API</h4>
- * The URL (JDK1.0) and URI (Java 1.4) classes predate builders and instead use telescoping
+ *
+ * <p>The URL (JDK1.0) and URI (Java 1.4) classes predate builders and instead use telescoping
  * constructors. For example, there's no API to compose a URI with a custom port without also
  * providing a query and fragment.
  *
@@ -254,7 +277,7 @@ import okio.Buffer;
  */
 public final class HttpUrl {
   private static final char[] HEX_DIGITS =
-      { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
+      {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
   static final String USERNAME_ENCODE_SET = " \"':;<=>@[]^`{}|/\\?#";
   static final String PASSWORD_ENCODE_SET = " \"':;<=>@[]^`{}|/\\?#";
   static final String PATH_SEGMENT_ENCODE_SET = " \"<>^`{}|/\\?#";
@@ -282,9 +305,9 @@ public final class HttpUrl {
   private final int port;
 
   /**
-   * A list of canonical path segments. This list always contains at least one element, which may
-   * be the empty string. Each segment is formatted with a leading '/', so if path segments were
-   * ["a", "b", ""], then the encoded path would be "/a/b/".
+   * A list of canonical path segments. This list always contains at least one element, which may be
+   * the empty string. Each segment is formatted with a leading '/', so if path segments were ["a",
+   * "b", ""], then the encoded path would be "/a/b/".
    */
   private final List<String> pathSegments;
 
@@ -327,19 +350,30 @@ public final class HttpUrl {
   }
 
   /**
-   * Returns this URL as a {@link URI java.net.URI}. Because {@code URI} forbids certain characters
-   * like {@code [} and {@code |}, the returned URI may escape more characters than this URL.
+   * Returns this URL as a {@link URI java.net.URI}. Because {@code URI} is more strict than this
+   * class, the returned URI may be semantically different from this URL:
    *
-   * <p>This method throws an unchecked {@link IllegalStateException} if it cannot be converted to a
-   * URI even after escaping forbidden characters. In particular, URLs that contain malformed
-   * percent escapes like {@code http://host/%xx} will trigger this exception.
+   * <ul>
+   *     <li>Characters forbidden by URI like {@code [} and {@code |} will be escaped.
+   *     <li>Invalid percent-encoded sequences like {@code %xx} will be encoded like {@code %25xx}.
+   *     <li>Whitespace and control characters in the fragment will be stripped.
+   * </ul>
+   *
+   * <p>These differences may have a significant consequence when the URI is interpretted by a
+   * webserver. For this reason the {@linkplain URI URI class} and this method should be avoided.
    */
   public URI uri() {
+    String uri = newBuilder().reencodeForUri().toString();
     try {
-      String uri = newBuilder().reencodeForUri().toString();
       return new URI(uri);
     } catch (URISyntaxException e) {
-      throw new IllegalStateException("not valid as a java.net.URI: " + url);
+      // Unlikely edge case: the URI has a forbidden character in the fragment. Strip it & retry.
+      try {
+        String stripped = uri.replaceAll("[\\u0000-\\u001F\\u007F-\\u009F\\p{javaWhitespace}]", "");
+        return URI.create(stripped);
+      } catch (Exception e1) {
+        throw new RuntimeException(e); // Unexpected!
+      }
     }
   }
 
@@ -380,6 +414,7 @@ public final class HttpUrl {
   /**
    * Returns the host address suitable for use with {@link InetAddress#getAllByName(String)}. May
    * be:
+   *
    * <ul>
    *   <li>A regular host name, like {@code android.com}.
    *   <li>An IPv4 address, like {@code 127.0.0.1}.
@@ -419,8 +454,8 @@ public final class HttpUrl {
   }
 
   /**
-   * Returns the entire path of this URL, encoded for use in HTTP resource resolution. The
-   * returned path is always nonempty and is prefixed with {@code /}.
+   * Returns the entire path of this URL, encoded for use in HTTP resource resolution. The returned
+   * path is always nonempty and is prefixed with {@code /}.
    */
   public String encodedPath() {
     int pathStart = url.indexOf('/', scheme.length() + 3); // "://".length() == 3.
@@ -441,7 +476,7 @@ public final class HttpUrl {
     List<String> result = new ArrayList<>();
     for (int i = pathStart; i < pathEnd; ) {
       i++; // Skip the '/'.
-      int segmentEnd = delimiterOffset(url, i, pathEnd, "/");
+      int segmentEnd = delimiterOffset(url, i, pathEnd, '/');
       result.add(url.substring(i, segmentEnd));
       i = segmentEnd;
     }
@@ -460,7 +495,7 @@ public final class HttpUrl {
   public String encodedQuery() {
     if (queryNamesAndValues == null) return null; // No query.
     int queryStart = url.indexOf('?') + 1;
-    int queryEnd = delimiterOffset(url, queryStart + 1, url.length(), "#");
+    int queryEnd = delimiterOffset(url, queryStart + 1, url.length(), '#');
     return url.substring(queryStart, queryEnd);
   }
 
@@ -478,10 +513,10 @@ public final class HttpUrl {
   }
 
   /**
-   * Cuts {@code encodedQuery} up into alternating parameter names and values. This divides a
-   * query string like {@code subject=math&easy&problem=5-2=3} into the list {@code ["subject",
-   * "math", "easy", null, "problem", "5-2=3"]}. Note that values may be null and may contain
-   * '=' characters.
+   * Cuts {@code encodedQuery} up into alternating parameter names and values. This divides a query
+   * string like {@code subject=math&easy&problem=5-2=3} into the list {@code ["subject", "math",
+   * "easy", null, "problem", "5-2=3"]}. Note that values may be null and may contain '='
+   * characters.
    */
   static List<String> queryStringToNamesAndValues(String encodedQuery) {
     List<String> result = new ArrayList<>();
@@ -565,11 +600,13 @@ public final class HttpUrl {
     return fragment;
   }
 
-  /** Returns the URL that would be retrieved by following {@code link} from this URL. */
+  /**
+   * Returns the URL that would be retrieved by following {@code link} from this URL, or null if
+   * the resulting URL is not well-formed.
+   */
   public HttpUrl resolve(String link) {
-    Builder builder = new Builder();
-    Builder.ParseResult result = builder.parse(this, link);
-    return result == Builder.ParseResult.SUCCESS ? builder.build() : null;
+    Builder builder = newBuilder(link);
+    return builder != null ? builder.build() : null;
   }
 
   public Builder newBuilder() {
@@ -585,6 +622,16 @@ public final class HttpUrl {
     result.encodedQuery(encodedQuery());
     result.encodedFragment = encodedFragment();
     return result;
+  }
+
+  /**
+   * Returns a builder for the URL that would be retrieved by following {@code link} from this URL,
+   * or null if the resulting URL is not well-formed.
+   */
+  public Builder newBuilder(String link) {
+    Builder builder = new Builder();
+    Builder.ParseResult result = builder.parse(this, link);
+    return result == Builder.ParseResult.SUCCESS ? builder : null;
   }
 
   /**
@@ -673,31 +720,33 @@ public final class HttpUrl {
 
     public Builder username(String username) {
       if (username == null) throw new IllegalArgumentException("username == null");
-      this.encodedUsername = canonicalize(username, USERNAME_ENCODE_SET, false, false, true);
+      this.encodedUsername = canonicalize(username, USERNAME_ENCODE_SET, false, false, false, true);
       return this;
     }
 
     public Builder encodedUsername(String encodedUsername) {
       if (encodedUsername == null) throw new IllegalArgumentException("encodedUsername == null");
-      this.encodedUsername = canonicalize(encodedUsername, USERNAME_ENCODE_SET, true, false, true);
+      this.encodedUsername = canonicalize(
+          encodedUsername, USERNAME_ENCODE_SET, true, false, false, true);
       return this;
     }
 
     public Builder password(String password) {
       if (password == null) throw new IllegalArgumentException("password == null");
-      this.encodedPassword = canonicalize(password, PASSWORD_ENCODE_SET, false, false, true);
+      this.encodedPassword = canonicalize(password, PASSWORD_ENCODE_SET, false, false, false, true);
       return this;
     }
 
     public Builder encodedPassword(String encodedPassword) {
       if (encodedPassword == null) throw new IllegalArgumentException("encodedPassword == null");
-      this.encodedPassword = canonicalize(encodedPassword, PASSWORD_ENCODE_SET, true, false, true);
+      this.encodedPassword = canonicalize(
+          encodedPassword, PASSWORD_ENCODE_SET, true, false, false, true);
       return this;
     }
 
     /**
      * @param host either a regular hostname, International Domain Name, IPv4 address, or IPv6
-     *     address.
+     * address.
      */
     public Builder host(String host) {
       if (host == null) throw new IllegalArgumentException("host == null");
@@ -734,7 +783,7 @@ public final class HttpUrl {
     public Builder setPathSegment(int index, String pathSegment) {
       if (pathSegment == null) throw new IllegalArgumentException("pathSegment == null");
       String canonicalPathSegment = canonicalize(
-          pathSegment, 0, pathSegment.length(), PATH_SEGMENT_ENCODE_SET, false, false, true);
+          pathSegment, 0, pathSegment.length(), PATH_SEGMENT_ENCODE_SET, false, false, false, true);
       if (isDot(canonicalPathSegment) || isDotDot(canonicalPathSegment)) {
         throw new IllegalArgumentException("unexpected path segment: " + pathSegment);
       }
@@ -747,7 +796,7 @@ public final class HttpUrl {
         throw new IllegalArgumentException("encodedPathSegment == null");
       }
       String canonicalPathSegment = canonicalize(encodedPathSegment,
-          0, encodedPathSegment.length(), PATH_SEGMENT_ENCODE_SET, true, false, true);
+          0, encodedPathSegment.length(), PATH_SEGMENT_ENCODE_SET, true, false, false, true);
       encodedPathSegments.set(index, canonicalPathSegment);
       if (isDot(canonicalPathSegment) || isDotDot(canonicalPathSegment)) {
         throw new IllegalArgumentException("unexpected path segment: " + encodedPathSegment);
@@ -774,7 +823,8 @@ public final class HttpUrl {
 
     public Builder query(String query) {
       this.encodedQueryNamesAndValues = query != null
-          ? queryStringToNamesAndValues(canonicalize(query, QUERY_ENCODE_SET, false, true, true))
+          ? queryStringToNamesAndValues(canonicalize(
+          query, QUERY_ENCODE_SET, false, false, true, true))
           : null;
       return this;
     }
@@ -782,7 +832,7 @@ public final class HttpUrl {
     public Builder encodedQuery(String encodedQuery) {
       this.encodedQueryNamesAndValues = encodedQuery != null
           ? queryStringToNamesAndValues(
-              canonicalize(encodedQuery, QUERY_ENCODE_SET, true, true, true))
+          canonicalize(encodedQuery, QUERY_ENCODE_SET, true, false, true, true))
           : null;
       return this;
     }
@@ -792,9 +842,9 @@ public final class HttpUrl {
       if (name == null) throw new IllegalArgumentException("name == null");
       if (encodedQueryNamesAndValues == null) encodedQueryNamesAndValues = new ArrayList<>();
       encodedQueryNamesAndValues.add(
-          canonicalize(name, QUERY_COMPONENT_ENCODE_SET, false, true, true));
+          canonicalize(name, QUERY_COMPONENT_ENCODE_SET, false, false, true, true));
       encodedQueryNamesAndValues.add(value != null
-          ? canonicalize(value, QUERY_COMPONENT_ENCODE_SET, false, true, true)
+          ? canonicalize(value, QUERY_COMPONENT_ENCODE_SET, false, false, true, true)
           : null);
       return this;
     }
@@ -804,9 +854,9 @@ public final class HttpUrl {
       if (encodedName == null) throw new IllegalArgumentException("encodedName == null");
       if (encodedQueryNamesAndValues == null) encodedQueryNamesAndValues = new ArrayList<>();
       encodedQueryNamesAndValues.add(
-          canonicalize(encodedName, QUERY_COMPONENT_ENCODE_SET, true, true, true));
+          canonicalize(encodedName, QUERY_COMPONENT_ENCODE_SET, true, false, true, true));
       encodedQueryNamesAndValues.add(encodedValue != null
-          ? canonicalize(encodedValue, QUERY_COMPONENT_ENCODE_SET, true, true, true)
+          ? canonicalize(encodedValue, QUERY_COMPONENT_ENCODE_SET, true, false, true, true)
           : null);
       return this;
     }
@@ -826,7 +876,8 @@ public final class HttpUrl {
     public Builder removeAllQueryParameters(String name) {
       if (name == null) throw new IllegalArgumentException("name == null");
       if (encodedQueryNamesAndValues == null) return this;
-      String nameToRemove = canonicalize(name, QUERY_COMPONENT_ENCODE_SET, false, true, true);
+      String nameToRemove = canonicalize(
+          name, QUERY_COMPONENT_ENCODE_SET, false, false, true, true);
       removeAllCanonicalQueryParameters(nameToRemove);
       return this;
     }
@@ -835,7 +886,7 @@ public final class HttpUrl {
       if (encodedName == null) throw new IllegalArgumentException("encodedName == null");
       if (encodedQueryNamesAndValues == null) return this;
       removeAllCanonicalQueryParameters(
-          canonicalize(encodedName, QUERY_COMPONENT_ENCODE_SET, true, true, true));
+          canonicalize(encodedName, QUERY_COMPONENT_ENCODE_SET, true, false, true, true));
       return this;
     }
 
@@ -854,14 +905,14 @@ public final class HttpUrl {
 
     public Builder fragment(String fragment) {
       this.encodedFragment = fragment != null
-          ? canonicalize(fragment, FRAGMENT_ENCODE_SET, false, false, false)
+          ? canonicalize(fragment, FRAGMENT_ENCODE_SET, false, false, false, false)
           : null;
       return this;
     }
 
     public Builder encodedFragment(String encodedFragment) {
       this.encodedFragment = encodedFragment != null
-          ? canonicalize(encodedFragment, FRAGMENT_ENCODE_SET, true, false, false)
+          ? canonicalize(encodedFragment, FRAGMENT_ENCODE_SET, true, false, false, false)
           : null;
       return this;
     }
@@ -874,20 +925,20 @@ public final class HttpUrl {
       for (int i = 0, size = encodedPathSegments.size(); i < size; i++) {
         String pathSegment = encodedPathSegments.get(i);
         encodedPathSegments.set(i,
-            canonicalize(pathSegment, PATH_SEGMENT_ENCODE_SET_URI, true, false, true));
+            canonicalize(pathSegment, PATH_SEGMENT_ENCODE_SET_URI, true, true, false, true));
       }
       if (encodedQueryNamesAndValues != null) {
         for (int i = 0, size = encodedQueryNamesAndValues.size(); i < size; i++) {
           String component = encodedQueryNamesAndValues.get(i);
           if (component != null) {
             encodedQueryNamesAndValues.set(i,
-                canonicalize(component, QUERY_COMPONENT_ENCODE_SET_URI, true, true, true));
+                canonicalize(component, QUERY_COMPONENT_ENCODE_SET_URI, true, true, true, true));
           }
         }
       }
       if (encodedFragment != null) {
         encodedFragment = canonicalize(
-            encodedFragment, FRAGMENT_ENCODE_SET_URI, true, false, false);
+            encodedFragment, FRAGMENT_ENCODE_SET_URI, true, true, false, false);
       }
       return this;
     }
@@ -998,21 +1049,21 @@ public final class HttpUrl {
               // User info precedes.
               if (!hasPassword) {
                 int passwordColonOffset = delimiterOffset(
-                    input, pos, componentDelimiterOffset, ":");
+                    input, pos, componentDelimiterOffset, ':');
                 String canonicalUsername = canonicalize(
-                    input, pos, passwordColonOffset, USERNAME_ENCODE_SET, true, false, true);
+                    input, pos, passwordColonOffset, USERNAME_ENCODE_SET, true, false, false, true);
                 this.encodedUsername = hasUsername
                     ? this.encodedUsername + "%40" + canonicalUsername
                     : canonicalUsername;
                 if (passwordColonOffset != componentDelimiterOffset) {
                   hasPassword = true;
                   this.encodedPassword = canonicalize(input, passwordColonOffset + 1,
-                      componentDelimiterOffset, PASSWORD_ENCODE_SET, true, false, true);
+                      componentDelimiterOffset, PASSWORD_ENCODE_SET, true, false, false, true);
                 }
                 hasUsername = true;
               } else {
-                this.encodedPassword = this.encodedPassword + "%40" + canonicalize(
-                    input, pos, componentDelimiterOffset, PASSWORD_ENCODE_SET, true, false, true);
+                this.encodedPassword = this.encodedPassword + "%40" + canonicalize(input, pos,
+                    componentDelimiterOffset, PASSWORD_ENCODE_SET, true, false, false, true);
               }
               pos = componentDelimiterOffset + 1;
               break;
@@ -1057,16 +1108,16 @@ public final class HttpUrl {
 
       // Query.
       if (pos < limit && input.charAt(pos) == '?') {
-        int queryDelimiterOffset = delimiterOffset(input, pos, limit, "#");
+        int queryDelimiterOffset = delimiterOffset(input, pos, limit, '#');
         this.encodedQueryNamesAndValues = queryStringToNamesAndValues(canonicalize(
-            input, pos + 1, queryDelimiterOffset, QUERY_ENCODE_SET, true, true, true));
+            input, pos + 1, queryDelimiterOffset, QUERY_ENCODE_SET, true, false, true, true));
         pos = queryDelimiterOffset;
       }
 
       // Fragment.
       if (pos < limit && input.charAt(pos) == '#') {
         this.encodedFragment = canonicalize(
-            input, pos + 1, limit, FRAGMENT_ENCODE_SET, true, false, false);
+            input, pos + 1, limit, FRAGMENT_ENCODE_SET, true, false, false, false);
       }
 
       return ParseResult.SUCCESS;
@@ -1103,7 +1154,7 @@ public final class HttpUrl {
     private void push(String input, int pos, int limit, boolean addTrailingSlash,
         boolean alreadyEncoded) {
       String segment = canonicalize(
-          input, pos, limit, PATH_SEGMENT_ENCODE_SET, alreadyEncoded, false, true);
+          input, pos, limit, PATH_SEGMENT_ENCODE_SET, alreadyEncoded, false, false, true);
       if (isDot(segment)) {
         return; // Skip '.' path segments.
       }
@@ -1136,8 +1187,8 @@ public final class HttpUrl {
      * Removes a path segment. When this method returns the last segment is always "", which means
      * the encoded path will have a trailing '/'.
      *
-     * <p>Popping "/a/b/c/" yields "/a/b/". In this case the list of path segments goes from
-     * ["a", "b", "c", ""] to ["a", "b", ""].
+     * <p>Popping "/a/b/c/" yields "/a/b/". In this case the list of path segments goes from ["a",
+     * "b", "c", ""] to ["a", "b", ""].
      *
      * <p>Popping "/a/b/c" also yields "/a/b/". The list of path segments goes from ["a", "b", "c"]
      * to ["a", "b", ""].
@@ -1151,46 +1202,6 @@ public final class HttpUrl {
       } else {
         encodedPathSegments.add("");
       }
-    }
-
-    /**
-     * Increments {@code pos} until {@code input[pos]} is not ASCII whitespace. Stops at {@code
-     * limit}.
-     */
-    private int skipLeadingAsciiWhitespace(String input, int pos, int limit) {
-      for (int i = pos; i < limit; i++) {
-        switch (input.charAt(i)) {
-          case '\t':
-          case '\n':
-          case '\f':
-          case '\r':
-          case ' ':
-            continue;
-          default:
-            return i;
-        }
-      }
-      return limit;
-    }
-
-    /**
-     * Decrements {@code limit} until {@code input[limit - 1]} is not ASCII whitespace. Stops at
-     * {@code pos}.
-     */
-    private int skipTrailingAsciiWhitespace(String input, int pos, int limit) {
-      for (int i = limit - 1; i >= pos; i--) {
-        switch (input.charAt(i)) {
-          case '\t':
-          case '\n':
-          case '\f':
-          case '\r':
-          case ' ':
-            continue;
-          default:
-            return i + 1;
-        }
-      }
-      return pos;
     }
 
     /**
@@ -1377,47 +1388,6 @@ public final class HttpUrl {
       return true; // Success.
     }
 
-    /**
-     * Performs IDN ToASCII encoding and canonicalize the result to lowercase. e.g. This converts
-     * {@code ☃.net} to {@code xn--n3h.net}, and {@code WwW.GoOgLe.cOm} to {@code www.google.com}.
-     * {@code null} will be returned if the input cannot be ToASCII encoded or if the result
-     * contains unsupported ASCII characters.
-     */
-    private static String domainToAscii(String input) {
-      try {
-        String result = IDN.toASCII(input).toLowerCase(Locale.US);
-        if (result.isEmpty()) return null;
-
-        // Confirm that the IDN ToASCII result doesn't contain any illegal characters.
-        if (containsInvalidHostnameAsciiCodes(result)) {
-          return null;
-        }
-        // TODO: implement all label limits.
-        return result;
-      } catch (IllegalArgumentException e) {
-        return null;
-      }
-    }
-
-    private static boolean containsInvalidHostnameAsciiCodes(String hostnameAscii) {
-      for (int i = 0; i < hostnameAscii.length(); i++) {
-        char c = hostnameAscii.charAt(i);
-        // The WHATWG Host parsing rules accepts some character codes which are invalid by
-        // definition for OkHttp's host header checks (and the WHATWG Host syntax definition). Here
-        // we rule out characters that would cause problems in host headers.
-        if (c <= '\u001f' || c >= '\u007f') {
-          return true;
-        }
-        // Check for the characters mentioned in the WHATWG Host parsing spec:
-        // U+0000, U+0009, U+000A, U+000D, U+0020, "#", "%", "/", ":", "?", "@", "[", "\", and "]"
-        // (excluding the characters covered above).
-        if (" #%/:?@[\\]".indexOf(c) != -1) {
-          return true;
-        }
-      }
-      return false;
-    }
-
     private static String inet6AddressToAscii(byte[] address) {
       // Go through the address looking for the longest run of 0s. Each group is 2-bytes.
       int longestRunOffset = -1;
@@ -1454,7 +1424,7 @@ public final class HttpUrl {
     private static int parsePort(String input, int pos, int limit) {
       try {
         // Canonicalize the port string to skip '\n' etc.
-        String portString = canonicalize(input, pos, limit, "", false, false, true);
+        String portString = canonicalize(input, pos, limit, "", false, false, false, true);
         int i = Integer.parseInt(portString);
         if (i > 0 && i <= 65535) return i;
         return -1;
@@ -1462,17 +1432,6 @@ public final class HttpUrl {
         return -1; // Invalid port.
       }
     }
-  }
-
-  /**
-   * Returns the index of the first character in {@code input} that contains a character in {@code
-   * delimiters}. Returns limit if there is no such character.
-   */
-  private static int delimiterOffset(String input, int pos, int limit, String delimiters) {
-    for (int i = pos; i < limit; i++) {
-      if (delimiters.indexOf(input.charAt(i)) != -1) return i;
-    }
-    return limit;
   }
 
   static String percentDecode(String encoded, boolean plusIsSpace) {
@@ -1523,6 +1482,13 @@ public final class HttpUrl {
     }
   }
 
+  static boolean percentEncoded(String encoded, int pos, int limit) {
+    return pos + 2 < limit
+        && encoded.charAt(pos) == '%'
+        && decodeHexDigit(encoded.charAt(pos + 1)) != -1
+        && decodeHexDigit(encoded.charAt(pos + 2)) != -1;
+  }
+
   static int decodeHexDigit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -1542,24 +1508,26 @@ public final class HttpUrl {
    * </ul>
    *
    * @param alreadyEncoded true to leave '%' as-is; false to convert it to '%25'.
+   * @param strict true to encode '%' if it is not the prefix of a valid percent encoding.
    * @param plusIsSpace true to encode '+' as "%2B" if it is not already encoded.
    * @param asciiOnly true to encode all non-ASCII codepoints.
    */
   static String canonicalize(String input, int pos, int limit, String encodeSet,
-      boolean alreadyEncoded, boolean plusIsSpace, boolean asciiOnly) {
+      boolean alreadyEncoded, boolean strict, boolean plusIsSpace, boolean asciiOnly) {
     int codePoint;
     for (int i = pos; i < limit; i += Character.charCount(codePoint)) {
       codePoint = input.codePointAt(i);
       if (codePoint < 0x20
           || codePoint == 0x7f
-          || (codePoint >= 0x80 && asciiOnly)
+          || codePoint >= 0x80 && asciiOnly
           || encodeSet.indexOf(codePoint) != -1
-          || (codePoint == '%' && !alreadyEncoded)
-          || (codePoint == '+' && plusIsSpace)) {
+          || codePoint == '%' && (!alreadyEncoded || strict && !percentEncoded(input, i, limit))
+          || codePoint == '+' && plusIsSpace) {
         // Slow path: the character at i requires encoding!
         Buffer out = new Buffer();
         out.writeUtf8(input, pos, i);
-        canonicalize(out, input, i, limit, encodeSet, alreadyEncoded, plusIsSpace, asciiOnly);
+        canonicalize(out, input, i, limit, encodeSet, alreadyEncoded, strict, plusIsSpace,
+            asciiOnly);
         return out.readUtf8();
       }
     }
@@ -1568,8 +1536,8 @@ public final class HttpUrl {
     return input.substring(pos, limit);
   }
 
-  static void canonicalize(Buffer out, String input, int pos, int limit,
-      String encodeSet, boolean alreadyEncoded, boolean plusIsSpace, boolean asciiOnly) {
+  static void canonicalize(Buffer out, String input, int pos, int limit, String encodeSet,
+      boolean alreadyEncoded, boolean strict, boolean plusIsSpace, boolean asciiOnly) {
     Buffer utf8Buffer = null; // Lazily allocated.
     int codePoint;
     for (int i = pos; i < limit; i += Character.charCount(codePoint)) {
@@ -1582,9 +1550,9 @@ public final class HttpUrl {
         out.writeUtf8(alreadyEncoded ? "+" : "%2B");
       } else if (codePoint < 0x20
           || codePoint == 0x7f
-          || (codePoint >= 0x80 && asciiOnly)
+          || codePoint >= 0x80 && asciiOnly
           || encodeSet.indexOf(codePoint) != -1
-          || (codePoint == '%' && !alreadyEncoded)) {
+          || codePoint == '%' && (!alreadyEncoded || strict && !percentEncoded(input, i, limit))) {
         // Percent encode this character.
         if (utf8Buffer == null) {
           utf8Buffer = new Buffer();
@@ -1603,9 +1571,9 @@ public final class HttpUrl {
     }
   }
 
-  static String canonicalize(String input, String encodeSet, boolean alreadyEncoded,
+  static String canonicalize(String input, String encodeSet, boolean alreadyEncoded, boolean strict,
       boolean plusIsSpace, boolean asciiOnly) {
     return canonicalize(
-        input, 0, input.length(), encodeSet, alreadyEncoded, plusIsSpace, asciiOnly);
+        input, 0, input.length(), encodeSet, alreadyEncoded, strict, plusIsSpace, asciiOnly);
   }
 }

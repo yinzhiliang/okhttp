@@ -29,20 +29,20 @@ public class RecordingCallback implements Callback {
 
   private final List<RecordedResponse> responses = new ArrayList<>();
 
-  @Override public synchronized void onFailure(Request request, IOException e) {
-    responses.add(new RecordedResponse(request, null, null, null, e));
+  @Override public synchronized void onFailure(Call call, IOException e) {
+    responses.add(new RecordedResponse(call.request(), null, null, null, e));
     notifyAll();
   }
 
-  @Override public synchronized void onResponse(Response response) throws IOException {
+  @Override public synchronized void onResponse(Call call, Response response) throws IOException {
     String body = response.body().string();
-    responses.add(new RecordedResponse(response.request(), response, null, body, null));
+    responses.add(new RecordedResponse(call.request(), response, null, body, null));
     notifyAll();
   }
 
   /**
-   * Returns the recorded response triggered by {@code request}. Throws if the
-   * response isn't enqueued before the timeout.
+   * Returns the recorded response triggered by {@code request}. Throws if the response isn't
+   * enqueued before the timeout.
    */
   public synchronized RecordedResponse await(HttpUrl url) throws Exception {
     long timeoutMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) + TIMEOUT_MILLIS;
@@ -61,13 +61,5 @@ public class RecordingCallback implements Callback {
     }
 
     throw new AssertionError("Timed out waiting for response to " + url);
-  }
-
-  public synchronized void assertNoResponse(HttpUrl url) throws Exception {
-    for (RecordedResponse recordedResponse : responses) {
-      if (recordedResponse.request.url().equals(url)) {
-        throw new AssertionError("Expected no response for " + url);
-      }
-    }
   }
 }

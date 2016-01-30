@@ -15,18 +15,18 @@
  */
 package okhttp3.benchmarks;
 
-import okhttp3.Call;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.ResponseBody;
-import okhttp3.internal.SslContextBuilder;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocketFactory;
+import okhttp3.Call;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.ResponseBody;
+import okhttp3.internal.SslContextBuilder;
 
 class OkHttp extends SynchronousHttpClient {
   private static final boolean VERBOSE = false;
@@ -35,8 +35,9 @@ class OkHttp extends SynchronousHttpClient {
 
   @Override public void prepare(Benchmark benchmark) {
     super.prepare(benchmark);
-    client = new OkHttpClient();
-    client.setProtocols(benchmark.protocols);
+    client = new OkHttpClient.Builder()
+        .protocols(benchmark.protocols)
+        .build();
 
     if (benchmark.tls) {
       SSLContext sslContext = SslContextBuilder.localhost();
@@ -46,8 +47,10 @@ class OkHttp extends SynchronousHttpClient {
           return true;
         }
       };
-      client.setSslSocketFactory(socketFactory);
-      client.setHostnameVerifier(hostnameVerifier);
+      client = new OkHttpClient.Builder()
+          .sslSocketFactory(socketFactory)
+          .hostnameVerifier(hostnameVerifier)
+          .build();
     }
   }
 

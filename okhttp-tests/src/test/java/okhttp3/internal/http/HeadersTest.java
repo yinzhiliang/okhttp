@@ -15,17 +15,17 @@
  */
 package okhttp3.internal.http;
 
-import okhttp3.Headers;
-import okhttp3.Protocol;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.internal.framed.Header;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import okhttp3.Headers;
+import okhttp3.Protocol;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.internal.framed.Header;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -301,5 +301,57 @@ public final class HeadersTest {
     Map<String, List<String>> headerMap = headers.toMultimap();
     assertEquals(2, headerMap.get("cache-control").size());
     assertEquals(1, headerMap.get("user-agent").size());
+  }
+
+  @Test public void nameIndexesAreStrict() {
+    Headers headers = Headers.of("a", "b", "c", "d");
+    try {
+      headers.name(-1);
+      fail();
+    } catch (IndexOutOfBoundsException expected) {
+    }
+    assertEquals("a", headers.name(0));
+    assertEquals("c", headers.name(1));
+    try {
+      headers.name(2);
+      fail();
+    } catch (IndexOutOfBoundsException expected) {
+    }
+  }
+
+  @Test public void valueIndexesAreStrict() {
+    Headers headers = Headers.of("a", "b", "c", "d");
+    try {
+      headers.value(-1);
+      fail();
+    } catch (IndexOutOfBoundsException expected) {
+    }
+    assertEquals("b", headers.value(0));
+    assertEquals("d", headers.value(1));
+    try {
+      headers.value(2);
+      fail();
+    } catch (IndexOutOfBoundsException expected) {
+    }
+  }
+
+  @Test public void builderRejectsUnicodeInHeaderName() {
+    try {
+      new Headers.Builder().add("héader1", "value1");
+      fail("Should have complained about invalid name");
+    } catch (IllegalArgumentException expected) {
+      assertEquals("Unexpected char 0xe9 at 1 in header name: héader1",
+          expected.getMessage());
+    }
+  }
+
+  @Test public void builderRejectsUnicodeInHeaderValue() {
+    try {
+      new Headers.Builder().add("header1", "valué1");
+      fail("Should have complained about invalid value");
+    } catch (IllegalArgumentException expected) {
+      assertEquals("Unexpected char 0xe9 at 4 in header1 value: valué1",
+          expected.getMessage());
+    }
   }
 }

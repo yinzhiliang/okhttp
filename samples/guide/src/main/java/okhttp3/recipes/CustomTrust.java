@@ -15,11 +15,6 @@
  */
 package okhttp3.recipes;
 
-import okhttp3.CertificatePinner;
-import okhttp3.Headers;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.GeneralSecurityException;
@@ -31,15 +26,21 @@ import java.util.Collection;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
+import okhttp3.CertificatePinner;
+import okhttp3.Headers;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import okio.Buffer;
 
 public final class CustomTrust {
   private final OkHttpClient client;
 
   public CustomTrust() {
-    client = new OkHttpClient();
     SSLContext sslContext = sslContextForTrustedCertificates(trustedCertificatesInputStream());
-    client.setSslSocketFactory(sslContext.getSocketFactory());
+    client = new OkHttpClient.Builder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .build();
   }
 
   public void run() throws Exception {
@@ -150,8 +151,9 @@ public final class CustomTrust {
    * the host platform's built-in trust store.
    *
    * <h3>Warning: Customizing Trusted Certificates is Dangerous!</h3>
-   * Relying on your own trusted certificates limits your server team's ability to update their TLS
-   * certificates. By installing a specific set of trusted certificates, you take on additional
+   *
+   * <p>Relying on your own trusted certificates limits your server team's ability to update their
+   * TLS certificates. By installing a specific set of trusted certificates, you take on additional
    * operational complexity and limit your ability to migrate between certificate authorities. Do
    * not use custom trusted certificates in production without the blessing of your server's TLS
    * administrator.

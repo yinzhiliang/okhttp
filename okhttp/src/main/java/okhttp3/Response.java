@@ -15,23 +15,25 @@
  */
 package okhttp3;
 
-import okhttp3.internal.http.OkHeaders;
+import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import okhttp3.internal.http.OkHeaders;
+import okio.Buffer;
+import okio.BufferedSource;
 
-import static okhttp3.internal.http.StatusLine.HTTP_PERM_REDIRECT;
-import static okhttp3.internal.http.StatusLine.HTTP_TEMP_REDIRECT;
 import static java.net.HttpURLConnection.HTTP_MOVED_PERM;
 import static java.net.HttpURLConnection.HTTP_MOVED_TEMP;
 import static java.net.HttpURLConnection.HTTP_MULT_CHOICE;
 import static java.net.HttpURLConnection.HTTP_PROXY_AUTH;
 import static java.net.HttpURLConnection.HTTP_SEE_OTHER;
 import static java.net.HttpURLConnection.HTTP_UNAUTHORIZED;
+import static okhttp3.internal.http.StatusLine.HTTP_PERM_REDIRECT;
+import static okhttp3.internal.http.StatusLine.HTTP_TEMP_REDIRECT;
 
 /**
- * An HTTP response. Instances of this class are not immutable: the response
- * body is a one-shot value that may be consumed only once. All other properties
- * are immutable.
+ * An HTTP response. Instances of this class are not immutable: the response body is a one-shot
+ * value that may be consumed only once. All other properties are immutable.
  */
 public final class Response {
   private final Request request;
@@ -63,6 +65,7 @@ public final class Response {
   /**
    * The wire-level request that initiated this HTTP response. This is not
    * necessarily the same request issued by the application:
+   *
    * <ul>
    *     <li>It may be transformed by the HTTP client. For example, the client
    *         may copy headers like {@code Content-Length} from the request body.
@@ -76,8 +79,7 @@ public final class Response {
   }
 
   /**
-   * Returns the HTTP protocol, such as {@link Protocol#HTTP_1_1} or {@link
-   * Protocol#HTTP_1_0}.
+   * Returns the HTTP protocol, such as {@link Protocol#HTTP_1_1} or {@link Protocol#HTTP_1_0}.
    */
   public Protocol protocol() {
     return protocol;
@@ -89,8 +91,8 @@ public final class Response {
   }
 
   /**
-   * Returns true if the code is in [200..300), which means the request was
-   * successfully received, understood, and accepted.
+   * Returns true if the code is in [200..300), which means the request was successfully received,
+   * understood, and accepted.
    */
   public boolean isSuccessful() {
     return code >= 200 && code < 300;
@@ -102,8 +104,8 @@ public final class Response {
   }
 
   /**
-   * Returns the TLS handshake of the connection that carried this response, or
-   * null if the response was received without TLS.
+   * Returns the TLS handshake of the connection that carried this response, or null if the response
+   * was received without TLS.
    */
   public Handshake handshake() {
     return handshake;
@@ -124,6 +126,35 @@ public final class Response {
 
   public Headers headers() {
     return headers;
+  }
+
+  /**
+   * Peeks up to {@code byteCount} bytes from the response body and returns them as a new response
+   * body. If fewer than {@code byteCount} bytes are in the response body, the full response body is
+   * returned. If more than {@code byteCount} bytes are in the response body, the returned value
+   * will be truncated to {@code byteCount} bytes.
+   *
+   * <p>It is an error to call this method after the body has been consumed.
+   *
+   * <p><strong>Warning:</strong> this method loads the requested bytes into memory. Most
+   * applications should set a modest limit on {@code byteCount}, such as 1 MiB.
+   */
+  public ResponseBody peekBody(long byteCount) throws IOException {
+    BufferedSource source = body.source();
+    source.request(byteCount);
+    Buffer copy = source.buffer().clone();
+
+    // There may be more than byteCount bytes in source.buffer(). If there is, return a prefix.
+    Buffer result;
+    if (copy.size() > byteCount) {
+      result = new Buffer();
+      result.write(copy, byteCount);
+      copy.clear();
+    } else {
+      result = copy;
+    }
+
+    return ResponseBody.create(body.contentType(), result.size(), result);
   }
 
   public ResponseBody body() {
@@ -150,40 +181,38 @@ public final class Response {
   }
 
   /**
-   * Returns the raw response received from the network. Will be null if this
-   * response didn't use the network, such as when the response is fully cached.
-   * The body of the returned response should not be read.
+   * Returns the raw response received from the network. Will be null if this response didn't use
+   * the network, such as when the response is fully cached. The body of the returned response
+   * should not be read.
    */
   public Response networkResponse() {
     return networkResponse;
   }
 
   /**
-   * Returns the raw response received from the cache. Will be null if this
-   * response didn't use the cache. For conditional get requests the cache
-   * response and network response may both be non-null. The body of the
-   * returned response should not be read.
+   * Returns the raw response received from the cache. Will be null if this response didn't use the
+   * cache. For conditional get requests the cache response and network response may both be
+   * non-null. The body of the returned response should not be read.
    */
   public Response cacheResponse() {
     return cacheResponse;
   }
 
   /**
-   * Returns the response for the HTTP redirect or authorization challenge that
-   * triggered this response, or null if this response wasn't triggered by an
-   * automatic retry. The body of the returned response should not be read
-   * because it has already been consumed by the redirecting client.
+   * Returns the response for the HTTP redirect or authorization challenge that triggered this
+   * response, or null if this response wasn't triggered by an automatic retry. The body of the
+   * returned response should not be read because it has already been consumed by the redirecting
+   * client.
    */
   public Response priorResponse() {
     return priorResponse;
   }
 
   /**
-   * Returns the authorization challenges appropriate for this response's code.
-   * If the response code is 401 unauthorized, this returns the
-   * "WWW-Authenticate" challenges. If the response code is 407 proxy
-   * unauthorized, this returns the "Proxy-Authenticate" challenges. Otherwise
-   * this returns an empty list of challenges.
+   * Returns the authorization challenges appropriate for this response's code. If the response code
+   * is 401 unauthorized, this returns the "WWW-Authenticate" challenges. If the response code is
+   * 407 proxy unauthorized, this returns the "Proxy-Authenticate" challenges. Otherwise this
+   * returns an empty list of challenges.
    */
   public List<Challenge> challenges() {
     String responseField;
@@ -198,8 +227,8 @@ public final class Response {
   }
 
   /**
-   * Returns the cache control directives for this response. This is never null,
-   * even if this response contains no {@code Cache-Control} header.
+   * Returns the cache control directives for this response. This is never null, even if this
+   * response contains no {@code Cache-Control} header.
    */
   public CacheControl cacheControl() {
     CacheControl result = cacheControl;
@@ -273,8 +302,8 @@ public final class Response {
     }
 
     /**
-     * Sets the header named {@code name} to {@code value}. If this request
-     * already has any headers with that name, they are all replaced.
+     * Sets the header named {@code name} to {@code value}. If this request already has any headers
+     * with that name, they are all replaced.
      */
     public Builder header(String name, String value) {
       headers.set(name, value);
@@ -282,8 +311,8 @@ public final class Response {
     }
 
     /**
-     * Adds a header with {@code name} and {@code value}. Prefer this method for
-     * multiply-valued headers like "Set-Cookie".
+     * Adds a header with {@code name} and {@code value}. Prefer this method for multiply-valued
+     * headers like "Set-Cookie".
      */
     public Builder addHeader(String name, String value) {
       headers.add(name, value);

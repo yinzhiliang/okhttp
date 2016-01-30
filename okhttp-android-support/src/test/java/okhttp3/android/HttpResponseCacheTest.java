@@ -16,12 +16,6 @@
 
 package okhttp3.android;
 
-import okhttp3.AndroidInternal;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.OkUrlFactory;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import java.io.File;
 import java.io.InputStream;
 import java.net.CacheRequest;
@@ -31,6 +25,12 @@ import java.net.URI;
 import java.net.URLConnection;
 import java.util.List;
 import java.util.Map;
+import okhttp3.AndroidInternal;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.OkUrlFactory;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -48,16 +48,15 @@ import static org.junit.Assert.fail;
  * A port of Android's android.net.http.HttpResponseCacheTest to JUnit4.
  */
 public final class HttpResponseCacheTest {
-
   @Rule public TemporaryFolder cacheRule = new TemporaryFolder();
   @Rule public MockWebServer server = new MockWebServer();
 
   private File cacheDir;
-  private OkUrlFactory client;
+  private OkUrlFactory urlFactory;
 
   @Before public void setUp() throws Exception {
     cacheDir = cacheRule.getRoot();
-    client = new OkUrlFactory(new OkHttpClient());
+    urlFactory = new OkUrlFactory(new OkHttpClient());
   }
 
   @After public void tearDown() throws Exception {
@@ -133,8 +132,8 @@ public final class HttpResponseCacheTest {
   }
 
   /**
-   * Make sure that statistics tracking are wired all the way through the
-   * wrapper class. http://code.google.com/p/android/issues/detail?id=25418
+   * Make sure that statistics tracking are wired all the way through the wrapper class.
+   * http://code.google.com/p/android/issues/detail?id=25418
    */
   @Test public void statisticsTracking() throws Exception {
     HttpResponseCache cache = HttpResponseCache.install(cacheDir, 10 * 1024 * 1024);
@@ -165,8 +164,8 @@ public final class HttpResponseCacheTest {
   // This mimics the Android HttpHandler, which is found in the okhttp3 package.
   private URLConnection openUrl(HttpUrl url) {
     ResponseCache responseCache = ResponseCache.getDefault();
-    AndroidInternal.setResponseCache(client, responseCache);
-    return client.open(url.url());
+    AndroidInternal.setResponseCache(urlFactory, responseCache);
+    return urlFactory.open(url.url());
   }
 
   private void initializeCache(HttpResponseCache cache) {

@@ -15,36 +15,36 @@
  */
 package okhttp3.internal.framed;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.Authenticator;
+import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLContext;
 import okhttp3.Cache;
-import okhttp3.ConnectionPool;
-import okhttp3.HttpUrl;
+import okhttp3.Call;
+import okhttp3.Cookie;
+import okhttp3.Credentials;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.OkUrlFactory;
 import okhttp3.Protocol;
-import okhttp3.internal.RecordingAuthenticator;
+import okhttp3.RecordingCookieJar;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.internal.RecordingOkAuthenticator;
 import okhttp3.internal.SslContextBuilder;
 import okhttp3.internal.Util;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.mockwebserver.SocketPolicy;
-import okhttp3.testing.RecordingHostnameVerifier;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.Authenticator;
-import java.net.CookieManager;
-import java.net.HttpURLConnection;
-import java.net.SocketTimeoutException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.SSLContext;
+import okhttp3.RecordingHostnameVerifier;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.GzipSink;
@@ -56,6 +56,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -73,20 +74,21 @@ public abstract class HttpOverSpdyTest {
 
   protected SSLContext sslContext = SslContextBuilder.localhost();
   protected HostnameVerifier hostnameVerifier = new RecordingHostnameVerifier();
-  protected final OkUrlFactory client = new OkUrlFactory(new OkHttpClient());
-  protected HttpURLConnection connection;
+  protected OkHttpClient client;
   protected Cache cache;
 
-  protected HttpOverSpdyTest(Protocol protocol){
+  protected HttpOverSpdyTest(Protocol protocol) {
     this.protocol = protocol;
   }
 
   @Before public void setUp() throws Exception {
     server.useHttps(sslContext.getSocketFactory(), false);
-    client.client().setProtocols(Arrays.asList(protocol, Protocol.HTTP_1_1));
-    client.client().setSslSocketFactory(sslContext.getSocketFactory());
-    client.client().setHostnameVerifier(hostnameVerifier);
     cache = new Cache(tempDir.getRoot(), Integer.MAX_VALUE);
+    client = new OkHttpClient.Builder()
+        .protocols(Arrays.asList(protocol, Protocol.HTTP_1_1))
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build();
   }
 
   @After public void tearDown() throws Exception {
@@ -94,13 +96,18 @@ public abstract class HttpOverSpdyTest {
   }
 
   @Test public void get() throws Exception {
-    MockResponse response = new MockResponse().setBody("ABCDE").setStatus("HTTP/1.1 200 Sweet");
-    server.enqueue(response);
+    server.enqueue(new MockResponse()
+        .setBody("ABCDE")
+        .setStatus("HTTP/1.1 200 Sweet"));
 
-    connection = client.open(server.url("/foo").url());
-    assertContent("ABCDE", connection, Integer.MAX_VALUE);
-    assertEquals(200, connection.getResponseCode());
-    assertEquals("Sweet", connection.getResponseMessage());
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/foo"))
+        .build());
+    Response response = call.execute();
+
+    assertEquals("ABCDE", response.body().string());
+    assertEquals(200, response.code());
+    assertEquals("Sweet", response.message());
 
     RecordedRequest request = server.takeRequest();
     assertEquals("GET /foo HTTP/1.1", request.getRequestLine());
@@ -111,8 +118,13 @@ public abstract class HttpOverSpdyTest {
   @Test public void emptyResponse() throws IOException {
     server.enqueue(new MockResponse());
 
-    connection = client.open(server.url("/foo").url());
-    assertEquals(-1, connection.getInputStream().read());
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/foo"))
+        .build());
+    Response response = call.execute();
+
+    assertEquals(-1, response.body().byteStream().read());
+    response.body().close();
   }
 
   byte[] postBytes = "FGHIJ".getBytes(Util.UTF_8);
@@ -120,11 +132,21 @@ public abstract class HttpOverSpdyTest {
   @Test public void noDefaultContentLengthOnStreamingPost() throws Exception {
     server.enqueue(new MockResponse().setBody("ABCDE"));
 
-    connection = client.open(server.url("/foo").url());
-    connection.setDoOutput(true);
-    connection.setChunkedStreamingMode(0);
-    connection.getOutputStream().write(postBytes);
-    assertContent("ABCDE", connection, Integer.MAX_VALUE);
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/foo"))
+        .post(new RequestBody() {
+          @Override public MediaType contentType() {
+            return MediaType.parse("text/plain; charset=utf-8");
+          }
+
+          @Override public void writeTo(BufferedSink sink) throws IOException {
+            sink.write(postBytes);
+          }
+        })
+        .build());
+
+    Response response = call.execute();
+    assertEquals("ABCDE", response.body().string());
 
     RecordedRequest request = server.takeRequest();
     assertEquals("POST /foo HTTP/1.1", request.getRequestLine());
@@ -135,11 +157,25 @@ public abstract class HttpOverSpdyTest {
   @Test public void userSuppliedContentLengthHeader() throws Exception {
     server.enqueue(new MockResponse().setBody("ABCDE"));
 
-    connection = client.open(server.url("/foo").url());
-    connection.setRequestProperty("Content-Length", String.valueOf(postBytes.length));
-    connection.setDoOutput(true);
-    connection.getOutputStream().write(postBytes);
-    assertContent("ABCDE", connection, Integer.MAX_VALUE);
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/foo"))
+        .post(new RequestBody() {
+          @Override public MediaType contentType() {
+            return MediaType.parse("text/plain; charset=utf-8");
+          }
+
+          @Override public long contentLength() throws IOException {
+            return postBytes.length;
+          }
+
+          @Override public void writeTo(BufferedSink sink) throws IOException {
+            sink.write(postBytes);
+          }
+        })
+        .build());
+
+    Response response = call.execute();
+    assertEquals("ABCDE", response.body().string());
 
     RecordedRequest request = server.takeRequest();
     assertEquals("POST /foo HTTP/1.1", request.getRequestLine());
@@ -150,28 +186,27 @@ public abstract class HttpOverSpdyTest {
   @Test public void closeAfterFlush() throws Exception {
     server.enqueue(new MockResponse().setBody("ABCDE"));
 
-    connection = client.open(server.url("/foo").url());
-    connection.setRequestProperty("Content-Length", String.valueOf(postBytes.length));
-    connection.setDoOutput(true);
-    connection.getOutputStream().write(postBytes); // push bytes into SpdyDataOutputStream.buffer
-    connection.getOutputStream().flush(); // FramedConnection.writeData subject to write window
-    connection.getOutputStream().close(); // FramedConnection.writeData empty frame
-    assertContent("ABCDE", connection, Integer.MAX_VALUE);
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/foo"))
+        .post(new RequestBody() {
+          @Override public MediaType contentType() {
+            return MediaType.parse("text/plain; charset=utf-8");
+          }
 
-    RecordedRequest request = server.takeRequest();
-    assertEquals("POST /foo HTTP/1.1", request.getRequestLine());
-    assertArrayEquals(postBytes, request.getBody().readByteArray());
-    assertEquals(postBytes.length, Integer.parseInt(request.getHeader("Content-Length")));
-  }
+          @Override public long contentLength() throws IOException {
+            return postBytes.length;
+          }
 
-  @Test public void setFixedLengthStreamingModeSetsContentLength() throws Exception {
-    server.enqueue(new MockResponse().setBody("ABCDE"));
+          @Override public void writeTo(BufferedSink sink) throws IOException {
+            sink.write(postBytes);  // push bytes into SpdyDataOutputStream.buffer
+            sink.flush(); // FramedConnection.writeData subject to write window
+            sink.close(); // FramedConnection.writeData empty frame
+          }
+        })
+        .build());
 
-    connection = client.open(server.url("/foo").url());
-    connection.setFixedLengthStreamingMode(postBytes.length);
-    connection.setDoOutput(true);
-    connection.getOutputStream().write(postBytes);
-    assertContent("ABCDE", connection, Integer.MAX_VALUE);
+    Response response = call.execute();
+    assertEquals("ABCDE", response.body().string());
 
     RecordedRequest request = server.takeRequest();
     assertEquals("POST /foo HTTP/1.1", request.getRequestLine());
@@ -183,12 +218,19 @@ public abstract class HttpOverSpdyTest {
     server.enqueue(new MockResponse().setBody("ABCDEF"));
     server.enqueue(new MockResponse().setBody("GHIJKL"));
 
-    HttpURLConnection connection1 = client.open(server.url("/r1").url());
-    HttpURLConnection connection2 = client.open(server.url("/r2").url());
-    assertEquals("ABC", readAscii(connection1.getInputStream(), 3));
-    assertEquals("GHI", readAscii(connection2.getInputStream(), 3));
-    assertEquals("DEF", readAscii(connection1.getInputStream(), 3));
-    assertEquals("JKL", readAscii(connection2.getInputStream(), 3));
+    Call call1 = client.newCall(new Request.Builder()
+        .url(server.url("/r1"))
+        .build());
+    Call call2 = client.newCall(new Request.Builder()
+        .url(server.url("/r1"))
+        .build());
+    Response response1 = call1.execute();
+    Response response2 = call2.execute();
+
+    assertEquals("ABC", response1.body().source().readUtf8(3));
+    assertEquals("GHI", response2.body().source().readUtf8(3));
+    assertEquals("DEF", response1.body().source().readUtf8(3));
+    assertEquals("JKL", response2.body().source().readUtf8(3));
     assertEquals(0, server.takeRequest().getSequenceNumber());
     assertEquals(1, server.takeRequest().getSequenceNumber());
   }
@@ -207,27 +249,42 @@ public abstract class HttpOverSpdyTest {
   }
 
   @Test public void gzippedResponseBody() throws Exception {
-    server.enqueue(
-        new MockResponse().addHeader("Content-Encoding: gzip").setBody(gzip("ABCABCABC")));
-    assertContent("ABCABCABC", client.open(server.url("/r1").url()), Integer.MAX_VALUE);
+    server.enqueue(new MockResponse()
+        .addHeader("Content-Encoding: gzip")
+        .setBody(gzip("ABCABCABC")));
+
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/r1"))
+        .build());
+
+    Response response = call.execute();
+    assertEquals("ABCABCABC", response.body().string());
   }
 
   @Test public void authenticate() throws Exception {
-    server.enqueue(new MockResponse().setResponseCode(HttpURLConnection.HTTP_UNAUTHORIZED)
+    server.enqueue(new MockResponse()
+        .setResponseCode(HttpURLConnection.HTTP_UNAUTHORIZED)
         .addHeader("www-authenticate: Basic realm=\"protected area\"")
         .setBody("Please authenticate."));
-    server.enqueue(new MockResponse().setBody("Successful auth!"));
+    server.enqueue(new MockResponse()
+        .setBody("Successful auth!"));
 
-    Authenticator.setDefault(new RecordingAuthenticator());
-    connection = client.open(server.url("/").url());
-    assertEquals("Successful auth!", readAscii(connection.getInputStream(), Integer.MAX_VALUE));
+    String credential = Credentials.basic("username", "password");
+    client = client.newBuilder()
+        .authenticator(new RecordingOkAuthenticator(credential))
+        .build();
+
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+    assertEquals("Successful auth!", response.body().string());
 
     RecordedRequest denied = server.takeRequest();
     assertNull(denied.getHeader("Authorization"));
     RecordedRequest accepted = server.takeRequest();
     assertEquals("GET / HTTP/1.1", accepted.getRequestLine());
-    assertEquals("Basic " + RecordingAuthenticator.BASE_64_CREDENTIALS,
-        accepted.getHeader("Authorization"));
+    assertEquals(credential, accepted.getHeader("Authorization"));
   }
 
   @Test public void redirect() throws Exception {
@@ -236,8 +293,12 @@ public abstract class HttpOverSpdyTest {
         .setBody("This page has moved!"));
     server.enqueue(new MockResponse().setBody("This is the new location!"));
 
-    connection = client.open(server.url("/").url());
-    assertContent("This is the new location!", connection, Integer.MAX_VALUE);
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+
+    Response response = call.execute();
+    assertEquals("This is the new location!", response.body().string());
 
     RecordedRequest request1 = server.takeRequest();
     assertEquals("/", request1.getPath());
@@ -248,9 +309,15 @@ public abstract class HttpOverSpdyTest {
   @Test public void readAfterLastByte() throws Exception {
     server.enqueue(new MockResponse().setBody("ABC"));
 
-    connection = client.open(server.url("/").url());
-    InputStream in = connection.getInputStream();
-    assertEquals("ABC", readAscii(in, 3));
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+
+    InputStream in = response.body().byteStream();
+    assertEquals('A', in.read());
+    assertEquals('B', in.read());
+    assertEquals('C', in.read());
     assertEquals(-1, in.read());
     assertEquals(-1, in.read());
   }
@@ -260,47 +327,64 @@ public abstract class HttpOverSpdyTest {
     server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE));
     server.enqueue(new MockResponse().setBody("A"));
 
-    connection = client.open(server.url("/").url());
-    connection.setReadTimeout(1000);
-    assertContent("A", connection, Integer.MAX_VALUE);
+    client = client.newBuilder()
+        .readTimeout(1000, MILLISECONDS)
+        .build();
+
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+    assertEquals("A", response.body().string());
   }
 
   /**
-   * Test to ensure we don't  throw a read timeout on responses that are
-   * progressing.  For this case, we take a 4KiB body and throttle it to
-   * 1KiB/second.  We set the read timeout to two seconds.  If our
-   * implementation is acting correctly, it will not throw, as it is
-   * progressing.
+   * Test to ensure we don't  throw a read timeout on responses that are progressing.  For this
+   * case, we take a 4KiB body and throttle it to 1KiB/second.  We set the read timeout to two
+   * seconds.  If our implementation is acting correctly, it will not throw, as it is progressing.
    */
   @Test public void readTimeoutMoreGranularThanBodySize() throws Exception {
-    char[] body = new char[4096]; // 4KiB to read
+    char[] body = new char[4096]; // 4KiB to read.
     Arrays.fill(body, 'y');
-    server.enqueue(new MockResponse().setBody(new String(body)).throttleBody(1024, 1, SECONDS)); // slow connection 1KiB/second
+    server.enqueue(new MockResponse().setBody(new String(body))
+        .throttleBody(1024, 1, SECONDS)); // Slow connection 1KiB/second.
 
-    connection = client.open(server.url("/").url());
-    connection.setReadTimeout(2000); // 2 seconds to read something.
-    assertContent(new String(body), connection, Integer.MAX_VALUE);
+    client = client.newBuilder()
+        .readTimeout(2, SECONDS)
+        .build();
+
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+
+    Response response = call.execute();
+    assertEquals(new String(body), response.body().string());
   }
 
   /**
-   * Test to ensure we throw a read timeout on responses that are progressing
-   * too slowly.  For this case, we take a 2KiB body and throttle it to
-   * 1KiB/second.  We set the read timeout to half a second.  If our
-   * implementation is acting correctly, it will throw, as a byte doesn't
-   * arrive in time.
+   * Test to ensure we throw a read timeout on responses that are progressing too slowly.  For this
+   * case, we take a 2KiB body and throttle it to 1KiB/second.  We set the read timeout to half a
+   * second.  If our implementation is acting correctly, it will throw, as a byte doesn't arrive in
+   * time.
    */
   @Test public void readTimeoutOnSlowConnection() throws Exception {
-    char[] body = new char[2048]; // 2KiB to read
+    char[] body = new char[2048]; // 2KiB to read.
     Arrays.fill(body, 'y');
     server.enqueue(new MockResponse()
         .setBody(new String(body))
-        .throttleBody(1024, 1, SECONDS)); // slow connection 1KiB/second
+        .throttleBody(1024, 1, SECONDS)); // Slow connection 1KiB/second.
 
-    connection = client.open(server.url("/").url());
-    connection.setReadTimeout(500); // half a second to read something
-    connection.connect();
+    client = client.newBuilder()
+        .readTimeout(500, MILLISECONDS) // Half a second to read something.
+        .build();
+
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+
     try {
-      readAscii(connection.getInputStream(), Integer.MAX_VALUE);
+      response.body().string();
       fail("Should have timed out!");
     } catch (SocketTimeoutException expected) {
       assertEquals("timeout", expected.getMessage());
@@ -308,127 +392,194 @@ public abstract class HttpOverSpdyTest {
   }
 
   @Test public void spdyConnectionTimeout() throws Exception {
-    MockResponse response = new MockResponse().setBody("A");
-    response.setBodyDelay(1, TimeUnit.SECONDS);
-    server.enqueue(response);
+    server.enqueue(new MockResponse()
+        .setBody("A")
+        .setBodyDelay(1, SECONDS));
 
-    HttpURLConnection connection1 = client.open(server.url("/").url());
-    connection1.setReadTimeout(2000);
-    HttpURLConnection connection2 = client.open(server.url("/").url());
-    connection2.setReadTimeout(200);
-    connection1.connect();
-    connection2.connect();
-    assertContent("A", connection1, Integer.MAX_VALUE);
+    OkHttpClient client1 = client.newBuilder()
+        .readTimeout(2000, MILLISECONDS)
+        .build();
+    Call call1 = client1
+        .newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+
+    OkHttpClient client2 = client.newBuilder()
+        .readTimeout(200, MILLISECONDS)
+        .build();
+    Call call2 = client2
+        .newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+
+    Response response1 = call1.execute();
+    assertEquals("A", response1.body().string());
+
+    try {
+      call2.execute();
+      fail();
+    } catch (IOException expected) {
+    }
   }
 
   @Test public void responsesAreCached() throws IOException {
-    client.client().setCache(cache);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
 
-    server.enqueue(new MockResponse().addHeader("cache-control: max-age=60").setBody("A"));
+    server.enqueue(new MockResponse()
+        .addHeader("cache-control: max-age=60")
+        .setBody("A"));
 
-    assertContent("A", client.open(server.url("/").url()), Integer.MAX_VALUE);
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
-    assertContent("A", client.open(server.url("/").url()), Integer.MAX_VALUE);
-    assertContent("A", client.open(server.url("/").url()), Integer.MAX_VALUE);
-    assertEquals(3, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(2, cache.getHitCount());
+    Call call1 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response1 = call1.execute();
+
+    assertEquals("A", response1.body().string());
+    assertEquals(1, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
+
+    Call call2 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response2 = call2.execute();
+    assertEquals("A", response2.body().string());
+
+    Call call3 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response3 = call3.execute();
+    assertEquals("A", response3.body().string());
+
+    assertEquals(3, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(2, cache.hitCount());
   }
 
   @Test public void conditionalCache() throws IOException {
-    client.client().setCache(cache);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
 
-    server.enqueue(new MockResponse().addHeader("ETag: v1").setBody("A"));
-    server.enqueue(new MockResponse().setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
+    server.enqueue(new MockResponse()
+        .addHeader("ETag: v1")
+        .setBody("A"));
+    server.enqueue(new MockResponse()
+        .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
-    assertContent("A", client.open(server.url("/").url()), Integer.MAX_VALUE);
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
-    assertContent("A", client.open(server.url("/").url()), Integer.MAX_VALUE);
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(2, cache.getNetworkCount());
-    assertEquals(1, cache.getHitCount());
+    Call call1 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response1 = call1.execute();
+    assertEquals("A", response1.body().string());
+
+    assertEquals(1, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
+
+    Call call2 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response2 = call2.execute();
+    assertEquals("A", response2.body().string());
+
+    assertEquals(2, cache.requestCount());
+    assertEquals(2, cache.networkCount());
+    assertEquals(1, cache.hitCount());
   }
 
   @Test public void responseCachedWithoutConsumingFullBody() throws IOException {
-    client.client().setCache(cache);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
 
-    server.enqueue(new MockResponse().addHeader("cache-control: max-age=60").setBody("ABCD"));
-    server.enqueue(new MockResponse().addHeader("cache-control: max-age=60").setBody("EFGH"));
+    server.enqueue(new MockResponse()
+        .addHeader("cache-control: max-age=60")
+        .setBody("ABCD"));
+    server.enqueue(new MockResponse()
+        .addHeader("cache-control: max-age=60")
+        .setBody("EFGH"));
 
-    HttpURLConnection connection1 = client.open(server.url("/").url());
-    InputStream in1 = connection1.getInputStream();
-    assertEquals("AB", readAscii(in1, 2));
-    in1.close();
+    Call call1 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response1 = call1.execute();
+    assertEquals("AB", response1.body().source().readUtf8(2));
+    response1.body().close();
 
-    HttpURLConnection connection2 = client.open(server.url("/").url());
-    InputStream in2 = connection2.getInputStream();
-    assertEquals("ABCD", readAscii(in2, Integer.MAX_VALUE));
-    in2.close();
+    Call call2 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response2 = call2.execute();
+    assertEquals("ABCD", response2.body().source().readUtf8());
+    response2.body().close();
   }
 
-  @Test public void acceptAndTransmitCookies() throws Exception {
-    CookieManager cookieManager = new CookieManager();
-    client.client().setCookieHandler(cookieManager);
+  @Test public void sendRequestCookies() throws Exception {
+    RecordingCookieJar cookieJar = new RecordingCookieJar();
+    Cookie requestCookie = new Cookie.Builder()
+        .name("a")
+        .value("b")
+        .domain(server.getHostName())
+        .build();
+    cookieJar.enqueueRequestCookies(requestCookie);
+    client = client.newBuilder()
+        .cookieJar(cookieJar)
+        .build();
+
+    server.enqueue(new MockResponse());
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+    assertEquals("", response.body().string());
+
+    RecordedRequest request = server.takeRequest();
+    assertEquals("a=b", request.getHeader("Cookie"));
+  }
+
+  @Test public void receiveResponseCookies() throws Exception {
+    RecordingCookieJar cookieJar = new RecordingCookieJar();
+    client = client.newBuilder()
+        .cookieJar(cookieJar)
+        .build();
 
     server.enqueue(new MockResponse()
-        .addHeader("set-cookie: c=oreo; domain=" + server.getCookieDomain())
-        .setBody("A"));
-    server.enqueue(new MockResponse()
-        .setBody("B"));
+        .addHeader("set-cookie: a=b"));
 
-    HttpUrl url = server.url("/");
-    assertContent("A", client.open(url.url()), Integer.MAX_VALUE);
-    Map<String, List<String>> requestHeaders = Collections.emptyMap();
-    assertEquals(Collections.singletonMap("Cookie", Arrays.asList("c=oreo")),
-        cookieManager.get(url.uri(), requestHeaders));
+    Call call = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response = call.execute();
+    assertEquals("", response.body().string());
 
-    assertContent("B", client.open(url.url()), Integer.MAX_VALUE);
-    RecordedRequest requestA = server.takeRequest();
-    assertNull(requestA.getHeader("Cookie"));
-    RecordedRequest requestB = server.takeRequest();
-    assertEquals("c=oreo", requestB.getHeader("Cookie"));
+    cookieJar.assertResponseCookies("a=b; path=/");
   }
 
   /** https://github.com/square/okhttp/issues/1191 */
-  @Test public void disconnectWithStreamNotEstablished() throws Exception {
-    ConnectionPool connectionPool = new ConnectionPool(5, 5000);
-    client.client().setConnectionPool(connectionPool);
-
-    server.enqueue(new MockResponse().setBody("abc"));
+  @Test public void cancelWithStreamNotCompleted() throws Exception {
+    server.enqueue(new MockResponse()
+        .setBody("abc"));
+    server.enqueue(new MockResponse()
+        .setBody("def"));
 
     // Disconnect before the stream is created. A connection is still established!
-    HttpURLConnection connection1 = client.open(server.url("/").url());
-    connection1.connect();
-    connection1.disconnect();
+    Call call1 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    call1.execute();
+    call1.cancel();
 
     // That connection is pooled, and it works.
-    assertEquals(1, connectionPool.getMultiplexedConnectionCount());
-    HttpURLConnection connection2 = client.open(server.url("/").url());
-    assertContent("abc", connection2, 3);
+    assertEquals(1, client.connectionPool().connectionCount());
+    Call call2 = client.newCall(new Request.Builder()
+        .url(server.url("/"))
+        .build());
+    Response response2 = call2.execute();
+    assertEquals("def", response2.body().string());
     assertEquals(0, server.takeRequest().getSequenceNumber());
-  }
-
-  void assertContent(String expected, HttpURLConnection connection, int limit)
-      throws IOException {
-    connection.connect();
-    assertEquals(expected, readAscii(connection.getInputStream(), limit));
-  }
-
-  private String readAscii(InputStream in, int count) throws IOException {
-    StringBuilder result = new StringBuilder();
-    for (int i = 0; i < count; i++) {
-      int value = in.read();
-      if (value == -1) {
-        in.close();
-        break;
-      }
-      result.append((char) value);
-    }
-    return result.toString();
   }
 
   public Buffer gzip(String bytes) throws IOException {
@@ -442,6 +593,7 @@ public abstract class HttpOverSpdyTest {
   class SpdyRequest implements Runnable {
     String path;
     CountDownLatch countDownLatch;
+
     public SpdyRequest(String path, CountDownLatch countDownLatch) {
       this.path = path;
       this.countDownLatch = countDownLatch;
@@ -449,8 +601,11 @@ public abstract class HttpOverSpdyTest {
 
     @Override public void run() {
       try {
-        HttpURLConnection conn = client.open(server.url(path).url());
-        assertEquals("A", readAscii(conn.getInputStream(), 1));
+        Call call = client.newCall(new Request.Builder()
+            .url(server.url(path))
+            .build());
+        Response response = call.execute();
+        assertEquals("A", response.body().string());
         countDownLatch.countDown();
       } catch (Exception e) {
         throw new RuntimeException(e);

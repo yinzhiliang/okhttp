@@ -15,6 +15,10 @@
  */
 package okhttp3.logging;
 
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.UnsupportedCharsetException;
+import java.util.concurrent.TimeUnit;
 import okhttp3.Connection;
 import okhttp3.Headers;
 import okhttp3.Interceptor;
@@ -27,19 +31,15 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import okhttp3.internal.Platform;
 import okhttp3.internal.http.HttpEngine;
-import java.io.IOException;
-import java.nio.charset.Charset;
-import java.util.concurrent.TimeUnit;
 import okio.Buffer;
 import okio.BufferedSource;
 
 /**
  * An OkHttp interceptor which logs request and response information. Can be applied as an
- * {@linkplain OkHttpClient#interceptors() application interceptor} or as a
- * {@linkplain OkHttpClient#networkInterceptors() network interceptor}.
- * <p>
- * The format of the logs created by this class should not be considered stable and may change
- * slightly between releases. If you need a stable logging format, use your own interceptor.
+ * {@linkplain OkHttpClient#interceptors() application interceptor} or as a {@linkplain
+ * OkHttpClient#networkInterceptors() network interceptor}. <p> The format of the logs created by
+ * this class should not be considered stable and may change slightly between releases. If you need
+ * a stable logging format, use your own interceptor.
  */
 public final class HttpLoggingInterceptor implements Interceptor {
   private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -49,27 +49,27 @@ public final class HttpLoggingInterceptor implements Interceptor {
     NONE,
     /**
      * Logs request and response lines.
-     * <p>
-     * Example:
-     * <pre>{@code
-     * --> POST /greeting HTTP/1.1 (3-byte body)
      *
-     * <-- HTTP/1.1 200 OK (22ms, 6-byte body)
+     * <p>Example:
+     * <pre>{@code
+     * --> POST /greeting http/1.1 (3-byte body)
+     *
+     * <-- 200 OK (22ms, 6-byte body)
      * }</pre>
      */
     BASIC,
     /**
      * Logs request and response lines and their respective headers.
-     * <p>
-     * Example:
+     *
+     * <p>Example:
      * <pre>{@code
-     * --> POST /greeting HTTP/1.1
+     * --> POST /greeting http/1.1
      * Host: example.com
      * Content-Type: plain/text
      * Content-Length: 3
      * --> END POST
      *
-     * <-- HTTP/1.1 200 OK (22ms)
+     * <-- 200 OK (22ms)
      * Content-Type: plain/text
      * Content-Length: 6
      * <-- END HTTP
@@ -78,10 +78,10 @@ public final class HttpLoggingInterceptor implements Interceptor {
     HEADERS,
     /**
      * Logs request and response lines and their respective headers and bodies (if present).
-     * <p>
-     * Example:
+     *
+     * <p>Example:
      * <pre>{@code
-     * --> POST /greeting HTTP/1.1
+     * --> POST /greeting http/1.1
      * Host: example.com
      * Content-Type: plain/text
      * Content-Length: 3
@@ -89,7 +89,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
      * Hi?
      * --> END GET
      *
-     * <-- HTTP/1.1 200 OK (22ms)
+     * <-- 200 OK (22ms)
      * Content-Type: plain/text
      * Content-Length: 6
      *
@@ -149,9 +149,8 @@ public final class HttpLoggingInterceptor implements Interceptor {
     boolean hasRequestBody = requestBody != null;
 
     Connection connection = chain.connection();
-    Protocol protocol = connection != null ? connection.getProtocol() : Protocol.HTTP_1_1;
-    String requestStartMessage =
-        "--> " + request.method() + ' ' + request.url() + ' ' + protocol(protocol);
+    Protocol protocol = connection != null ? connection.protocol() : Protocol.HTTP_1_1;
+    String requestStartMessage = "--> " + request.method() + ' ' + request.url() + ' ' + protocol;
     if (!logHeaders && hasRequestBody) {
       requestStartMessage += " (" + requestBody.contentLength() + "-byte body)";
     }
@@ -189,7 +188,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
         Charset charset = UTF8;
         MediaType contentType = requestBody.contentType();
         if (contentType != null) {
-          contentType.charset(UTF8);
+          charset = contentType.charset(UTF8);
         }
 
         logger.log("");
@@ -205,9 +204,11 @@ public final class HttpLoggingInterceptor implements Interceptor {
     long tookMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
 
     ResponseBody responseBody = response.body();
+    long contentLength = responseBody.contentLength();
+    String bodySize = contentLength != -1 ? contentLength + "-byte" : "unknown-length";
     logger.log("<-- " + response.code() + ' ' + response.message() + ' '
         + response.request().url() + " (" + tookMs + "ms" + (!logHeaders ? ", "
-        + responseBody.contentLength() + "-byte body" : "") + ')');
+        + bodySize + " body" : "") + ')');
 
     if (logHeaders) {
       Headers headers = response.headers();
@@ -227,10 +228,18 @@ public final class HttpLoggingInterceptor implements Interceptor {
         Charset charset = UTF8;
         MediaType contentType = responseBody.contentType();
         if (contentType != null) {
-          charset = contentType.charset(UTF8);
+          try {
+            charset = contentType.charset(UTF8);
+          } catch (UnsupportedCharsetException e) {
+            logger.log("");
+            logger.log("Couldn't decode the response body; charset is likely malformed.");
+            logger.log("<-- END HTTP");
+
+            return response;
+          }
         }
 
-        if (responseBody.contentLength() != 0) {
+        if (contentLength != 0) {
           logger.log("");
           logger.log(buffer.clone().readString(charset));
         }
@@ -245,9 +254,5 @@ public final class HttpLoggingInterceptor implements Interceptor {
   private boolean bodyEncoded(Headers headers) {
     String contentEncoding = headers.get("Content-Encoding");
     return contentEncoding != null && !contentEncoding.equalsIgnoreCase("identity");
-  }
-
-  private static String protocol(Protocol protocol) {
-    return protocol == Protocol.HTTP_1_0 ? "HTTP/1.0" : "HTTP/1.1";
   }
 }

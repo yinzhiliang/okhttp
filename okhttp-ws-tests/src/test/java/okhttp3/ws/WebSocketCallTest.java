@@ -15,6 +15,13 @@
  */
 package okhttp3.ws;
 
+import java.io.IOException;
+import java.net.ProtocolException;
+import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLContext;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -23,14 +30,7 @@ import okhttp3.ResponseBody;
 import okhttp3.internal.SslContextBuilder;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.testing.RecordingHostnameVerifier;
-import java.io.IOException;
-import java.net.ProtocolException;
-import java.util.Random;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.SSLContext;
+import okhttp3.RecordingHostnameVerifier;
 import okio.Buffer;
 import org.junit.After;
 import org.junit.Rule;
@@ -43,8 +43,8 @@ public final class WebSocketCallTest {
 
   private final SSLContext sslContext = SslContextBuilder.localhost();
   private final WebSocketRecorder listener = new WebSocketRecorder();
-  private final OkHttpClient client = new OkHttpClient();
   private final Random random = new Random(0);
+  private OkHttpClient client = new OkHttpClient();
 
   @After public void tearDown() {
     listener.assertExhausted();
@@ -89,7 +89,7 @@ public final class WebSocketCallTest {
   }
 
   @Test public void okButNotOk() {
-    server.enqueue(new MockResponse());
+    server.enqueue(new MockResponse().setResponseCode(200));
     awaitWebSocket();
     listener.assertFailure(ProtocolException.class, "Expected HTTP 101 response but was '200 OK'");
   }
@@ -174,16 +174,20 @@ public final class WebSocketCallTest {
 
   @Test public void wssScheme() throws IOException {
     server.useHttps(sslContext.getSocketFactory(), false);
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(new RecordingHostnameVerifier());
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(new RecordingHostnameVerifier())
+        .build();
 
     websocketScheme("wss");
   }
 
   @Test public void httpsScheme() throws IOException {
     server.useHttps(sslContext.getSocketFactory(), false);
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(new RecordingHostnameVerifier());
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(new RecordingHostnameVerifier())
+        .build();
 
     websocketScheme("https");
   }

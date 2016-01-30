@@ -15,18 +15,44 @@
  */
 package okhttp3;
 
-import okhttp3.internal.Util;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.Charset;
+import okhttp3.internal.Util;
 import okio.Buffer;
 import okio.BufferedSource;
 
 import static okhttp3.internal.Util.UTF_8;
 
+/**
+ * A one-shot stream from the origin server to the client application with the raw bytes of the
+ * response body. Each response body is supported by an active connection to the webserver. This
+ * imposes both obligations and limits on the client application.
+ *
+ * <h3>The response body must be closed.</h3>
+ *
+ * <p>Each response body is backed by a limited resource like a socket (live network responses) or
+ * an open file (for cached responses). Failing to close the response body will leak these resources
+ * and may ultimately cause the application to slow down or crash. Close the response body by
+ * calling either {@link ResponseBody#close close()}, {@link InputStream#close()
+ * byteStream().close()}, or {@link Reader#close() reader().close()}. The {@link #bytes()} and
+ * {@link #string()} methods both close the response body automatically.
+ *
+ * <h3>The response body can be consumed only once.</h3>
+ *
+ * <p>This class may be used to stream very large responses. For example, it is possible to use this
+ * class to read a response that is larger than the entire memory allocated to the current process.
+ * It can even stream a response larger than the total storage on the current device, which is a
+ * common requirement for video streaming applications.
+ *
+ * <p>Because this class does not buffer the full response in memory, the application may not
+ * re-read the bytes of the response. Use this one shot to read the entire response into memory with
+ * {@link #bytes()} or {@link #string()}. Or stream the response with either {@link #source()},
+ * {@link #byteStream()}, or {@link #charStream()}.
+ */
 public abstract class ResponseBody implements Closeable {
   /** Multiple calls to {@link #charStream()} must return the same instance. */
   private Reader reader;
@@ -34,8 +60,8 @@ public abstract class ResponseBody implements Closeable {
   public abstract MediaType contentType();
 
   /**
-   * Returns the number of bytes in that will returned by {@link #bytes}, or
-   * {@link #byteStream}, or -1 if unknown.
+   * Returns the number of bytes in that will returned by {@link #bytes}, or {@link #byteStream}, or
+   * -1 if unknown.
    */
   public abstract long contentLength();
 
@@ -65,9 +91,9 @@ public abstract class ResponseBody implements Closeable {
   }
 
   /**
-   * Returns the response as a character stream decoded with the charset
-   * of the Content-Type header. If that header is either absent or lacks a
-   * charset, this will attempt to decode the response body as UTF-8.
+   * Returns the response as a character stream decoded with the charset of the Content-Type header.
+   * If that header is either absent or lacks a charset, this will attempt to decode the response
+   * body as UTF-8.
    */
   public final Reader charStream() {
     Reader r = reader;
@@ -75,9 +101,9 @@ public abstract class ResponseBody implements Closeable {
   }
 
   /**
-   * Returns the response as a string decoded with the charset of the
-   * Content-Type header. If that header is either absent or lacks a charset,
-   * this will attempt to decode the response body as UTF-8.
+   * Returns the response as a string decoded with the charset of the Content-Type header. If that
+   * header is either absent or lacks a charset, this will attempt to decode the response body as
+   * UTF-8.
    */
   public final String string() throws IOException {
     return new String(bytes(), charset().name());
@@ -93,8 +119,8 @@ public abstract class ResponseBody implements Closeable {
   }
 
   /**
-   * Returns a new response body that transmits {@code content}. If {@code
-   * contentType} is non-null and lacks a charset, this will use UTF-8.
+   * Returns a new response body that transmits {@code content}. If {@code contentType} is non-null
+   * and lacks a charset, this will use UTF-8.
    */
   public static ResponseBody create(MediaType contentType, String content) {
     Charset charset = UTF_8;

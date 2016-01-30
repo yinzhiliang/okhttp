@@ -16,16 +16,9 @@
 
 package okhttp3;
 
-import okhttp3.internal.DiskLruCache;
-import okhttp3.internal.InternalCache;
-import okhttp3.internal.Util;
-import okhttp3.internal.http.CacheRequest;
-import okhttp3.internal.http.CacheStrategy;
-import okhttp3.internal.http.HttpMethod;
-import okhttp3.internal.http.OkHeaders;
-import okhttp3.internal.http.StatusLine;
-import okhttp3.internal.io.FileSystem;
+import java.io.Closeable;
 import java.io.File;
+import java.io.Flushable;
 import java.io.IOException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateEncodingException;
@@ -36,6 +29,15 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import okhttp3.internal.DiskLruCache;
+import okhttp3.internal.InternalCache;
+import okhttp3.internal.Util;
+import okhttp3.internal.http.CacheRequest;
+import okhttp3.internal.http.CacheStrategy;
+import okhttp3.internal.http.HttpMethod;
+import okhttp3.internal.http.OkHeaders;
+import okhttp3.internal.http.StatusLine;
+import okhttp3.internal.io.FileSystem;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.BufferedSource;
@@ -51,14 +53,15 @@ import okio.Source;
  * bandwidth.
  *
  * <h3>Cache Optimization</h3>
- * To measure cache effectiveness, this class tracks three statistics:
+ *
+ * <p>To measure cache effectiveness, this class tracks three statistics:
  * <ul>
- *   <li><strong>{@linkplain #getRequestCount() Request Count:}</strong> the number of HTTP
- *     requests issued since this cache was created.
- *   <li><strong>{@linkplain #getNetworkCount() Network Count:}</strong> the number of those
- *     requests that required network use.
- *   <li><strong>{@linkplain #getHitCount() Hit Count:}</strong> the number of those requests whose
- *     responses were served by the cache.
+ *     <li><strong>{@linkplain #requestCount() Request Count:}</strong> the number of HTTP
+ *         requests issued since this cache was created.
+ *     <li><strong>{@linkplain #networkCount() Network Count:}</strong> the number of those
+ *         requests that required network use.
+ *     <li><strong>{@linkplain #hitCount() Hit Count:}</strong> the number of those requests
+ *         whose responses were served by the cache.
  * </ul>
  *
  * Sometimes a request will result in a conditional cache hit. If the cache contains a stale copy of
@@ -72,8 +75,9 @@ import okio.Source;
  * partial responses.
  *
  * <h3>Force a Network Response</h3>
- * In some situations, such as after a user clicks a 'refresh' button, it may be necessary to skip
- * the cache, and fetch data directly from the server. To force a full refresh, add the {@code
+ *
+ * <p>In some situations, such as after a user clicks a 'refresh' button, it may be necessary to
+ * skip the cache, and fetch data directly from the server. To force a full refresh, add the {@code
  * no-cache} directive: <pre>   {@code
  *
  *   Request request = new Request.Builder()
@@ -94,7 +98,8 @@ import okio.Source;
  * }</pre>
  *
  * <h3>Force a Cache Response</h3>
- * Sometimes you'll want to show resources if they are available immediately, but not otherwise.
+ *
+ * <p>Sometimes you'll want to show resources if they are available immediately, but not otherwise.
  * This can be used so your application can show <i>something</i> while waiting for the latest data
  * to be downloaded. To restrict a request to locally-cached resources, add the {@code
  * only-if-cached} directive: <pre>   {@code
@@ -128,7 +133,7 @@ import okio.Source;
  * caching directives. It even offers convenient constants {@link CacheControl#FORCE_NETWORK} and
  * {@link CacheControl#FORCE_CACHE} that address the use cases above.
  */
-public final class Cache {
+public final class Cache implements Closeable, Flushable {
   private static final int VERSION = 201105;
   private static final int ENTRY_METADATA = 0;
   private static final int ENTRY_BODY = 1;
@@ -138,18 +143,23 @@ public final class Cache {
     @Override public Response get(Request request) throws IOException {
       return Cache.this.get(request);
     }
+
     @Override public CacheRequest put(Response response) throws IOException {
       return Cache.this.put(response);
     }
+
     @Override public void remove(Request request) throws IOException {
       Cache.this.remove(request);
     }
+
     @Override public void update(Response cached, Response network) throws IOException {
       Cache.this.update(cached, network);
     }
+
     @Override public void trackConditionalCacheHit() {
       Cache.this.trackConditionalCacheHit();
     }
+
     @Override public void trackResponse(CacheStrategy cacheStrategy) {
       Cache.this.trackResponse(cacheStrategy);
     }
@@ -274,34 +284,31 @@ public final class Cache {
   }
 
   /**
-   * Initialize the cache. This will include reading the journal files from
-   * the storage and building up the necessary in-memory cache information.
-   * <p>
-   * The initialization time may vary depending on the journal file size and
-   * the current actual cache size. The application needs to be aware of calling
-   * this function during the initialization phase and preferably in a background
-   * worker thread.
-   * <p>
-   * Note that if the application chooses to not call this method to initialize
-   * the cache. By default, the okhttp will perform lazy initialization upon the
-   * first usage of the cache.
+   * Initialize the cache. This will include reading the journal files from the storage and building
+   * up the necessary in-memory cache information.
+   *
+   * <p>The initialization time may vary depending on the journal file size and the current actual
+   * cache size. The application needs to be aware of calling this function during the
+   * initialization phase and preferably in a background worker thread.
+   *
+   * <p>Note that if the application chooses to not call this method to initialize the cache. By
+   * default, the okhttp will perform lazy initialization upon the first usage of the cache.
    */
   public void initialize() throws IOException {
     cache.initialize();
   }
 
   /**
-   * Closes the cache and deletes all of its stored values. This will delete
-   * all files in the cache directory including files that weren't created by
-   * the cache.
+   * Closes the cache and deletes all of its stored values. This will delete all files in the cache
+   * directory including files that weren't created by the cache.
    */
   public void delete() throws IOException {
     cache.delete();
   }
 
   /**
-   * Deletes all values stored in the cache. In-flight writes to the cache will
-   * complete normally, but the corresponding responses will not be stored.
+   * Deletes all values stored in the cache. In-flight writes to the cache will complete normally,
+   * but the corresponding responses will not be stored.
    */
   public void evictAll() throws IOException {
     cache.evictAll();
@@ -359,31 +366,31 @@ public final class Cache {
     };
   }
 
-  public synchronized int getWriteAbortCount() {
+  public synchronized int writeAbortCount() {
     return writeAbortCount;
   }
 
-  public synchronized int getWriteSuccessCount() {
+  public synchronized int writeSuccessCount() {
     return writeSuccessCount;
   }
 
-  public long getSize() throws IOException {
+  public long size() throws IOException {
     return cache.size();
   }
 
-  public long getMaxSize() {
+  public long maxSize() {
     return cache.getMaxSize();
   }
 
-  public void flush() throws IOException {
+  @Override public void flush() throws IOException {
     cache.flush();
   }
 
-  public void close() throws IOException {
+  @Override public void close() throws IOException {
     cache.close();
   }
 
-  public File getDirectory() {
+  public File directory() {
     return cache.getDirectory();
   }
 
@@ -397,7 +404,6 @@ public final class Cache {
     if (cacheStrategy.networkRequest != null) {
       // If this is a conditional request, we'll increment hitCount if/when it hits.
       networkCount++;
-
     } else if (cacheStrategy.cacheResponse != null) {
       // This response uses the cache and not the network. That's a cache hit.
       hitCount++;
@@ -408,15 +414,15 @@ public final class Cache {
     hitCount++;
   }
 
-  public synchronized int getNetworkCount() {
+  public synchronized int networkCount() {
     return networkCount;
   }
 
-  public synchronized int getHitCount() {
+  public synchronized int hitCount() {
     return hitCount;
   }
 
-  public synchronized int getRequestCount() {
+  public synchronized int requestCount() {
     return requestCount;
   }
 
@@ -507,21 +513,20 @@ public final class Cache {
      *   base64-encoded peerCertificate[0]
      *   base64-encoded peerCertificate[1]
      *   -1
+     *   TLSv1.2
      * }</pre>
-     * The file is newline separated. The first two lines are the URL and
-     * the request method. Next is the number of HTTP Vary request header
-     * lines, followed by those lines.
+     * The file is newline separated. The first two lines are the URL and the request method. Next
+     * is the number of HTTP Vary request header lines, followed by those lines.
      *
-     * <p>Next is the response status line, followed by the number of HTTP
-     * response header lines, followed by those lines.
+     * <p>Next is the response status line, followed by the number of HTTP response header lines,
+     * followed by those lines.
      *
-     * <p>HTTPS responses also contain SSL session information. This begins
-     * with a blank line, and then a line containing the cipher suite. Next
-     * is the length of the peer certificate chain. These certificates are
-     * base64-encoded and appear each on their own line. The next line
-     * contains the length of the local certificate chain. These
-     * certificates are also base64-encoded and appear each on their own
-     * line. A length of -1 is used to encode a null array.
+     * <p>HTTPS responses also contain SSL session information. This begins with a blank line, and
+     * then a line containing the cipher suite. Next is the length of the peer certificate chain.
+     * These certificates are base64-encoded and appear each on their own line. The next line
+     * contains the length of the local certificate chain. These certificates are also
+     * base64-encoded and appear each on their own line. A length of -1 is used to encode a null
+     * array. The last line is optional. If present, it contains the TLS version.
      */
     public Entry(Source in) throws IOException {
       try {
@@ -555,7 +560,10 @@ public final class Cache {
           CipherSuite cipherSuite = CipherSuite.forJavaName(cipherSuiteString);
           List<Certificate> peerCertificates = readCertificateList(source);
           List<Certificate> localCertificates = readCertificateList(source);
-          handshake = Handshake.get(cipherSuite, peerCertificates, localCertificates);
+          TlsVersion tlsVersion = !source.exhausted()
+              ? TlsVersion.forJavaName(source.readUtf8LineStrict())
+              : null;
+          handshake = Handshake.get(tlsVersion, cipherSuite, peerCertificates, localCertificates);
         } else {
           handshake = null;
         }
@@ -608,6 +616,11 @@ public final class Cache {
         sink.writeByte('\n');
         writeCertList(sink, handshake.peerCertificates());
         writeCertList(sink, handshake.localCertificates());
+        // The handshake’s TLS version is null on HttpsURLConnection and on older cached responses.
+        if (handshake.tlsVersion() != null) {
+          sink.writeUtf8(handshake.tlsVersion().javaName());
+          sink.writeByte('\n');
+        }
       }
       sink.close();
     }

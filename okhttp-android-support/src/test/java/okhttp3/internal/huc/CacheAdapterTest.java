@@ -15,14 +15,6 @@
  */
 package okhttp3.internal.huc;
 
-import okhttp3.AbstractResponseCache;
-import okhttp3.OkHttpClient;
-import okhttp3.OkUrlFactory;
-import okhttp3.internal.Internal;
-import okhttp3.internal.SslContextBuilder;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.testing.RecordingHostnameVerifier;
 import java.io.IOException;
 import java.net.CacheRequest;
 import java.net.CacheResponse;
@@ -38,6 +30,15 @@ import java.util.Map;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import okhttp3.AbstractResponseCache;
+import okhttp3.OkHttpClient;
+import okhttp3.OkUrlFactory;
+import okhttp3.internal.Internal;
+import okhttp3.internal.InternalCache;
+import okhttp3.internal.SslContextBuilder;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.RecordingHostnameVerifier;
 import okio.Buffer;
 import org.junit.After;
 import org.junit.Before;
@@ -51,10 +52,10 @@ import static org.junit.Assert.assertTrue;
 /**
  * A white-box test for {@link CacheAdapter}. See also:
  * <ul>
- *   <li>{@link ResponseCacheTest} for black-box tests that check that {@link ResponseCache}
- *   classes are called correctly by OkHttp.</li>
- *   <li>{@link JavaApiConverterTest} for tests that check Java API classes / OkHttp conversion
- *   logic. </li>
+ *     <li>{@link ResponseCacheTest} for black-box tests that check that {@link ResponseCache}
+ *         classes are called correctly by OkHttp.
+ *     <li>{@link JavaApiConverterTest} for tests that check Java API classes / OkHttp conversion
+ *         logic.
  * </ul>
  */
 public class CacheAdapterTest {
@@ -81,8 +82,8 @@ public class CacheAdapterTest {
     assertEquals("http", serverUrl.getProtocol());
 
     ResponseCache responseCache = new AbstractResponseCache() {
-      @Override
-      public CacheResponse get(URI uri, String method, Map<String, List<String>> headers) throws IOException {
+      @Override public CacheResponse get(
+          URI uri, String method, Map<String, List<String>> headers) throws IOException {
         assertEquals(toUri(serverUrl), uri);
         assertEquals("GET", method);
         assertTrue("Arbitrary standard header not present", headers.containsKey("User-Agent"));
@@ -90,7 +91,7 @@ public class CacheAdapterTest {
         return null;
       }
     };
-    Internal.instance.setCache(client, new CacheAdapter(responseCache));
+    setInternalCache(new CacheAdapter(responseCache));
 
     connection = new OkUrlFactory(client).open(serverUrl);
     connection.setRequestProperty("key1", "value1");
@@ -113,9 +114,11 @@ public class CacheAdapterTest {
         return null;
       }
     };
-    Internal.instance.setCache(client, new CacheAdapter(responseCache));
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(hostnameVerifier);
+    setInternalCache(new CacheAdapter(responseCache));
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build();
 
     connection = new OkUrlFactory(client).open(serverUrl);
     connection.setRequestProperty("key1", "value1");
@@ -157,7 +160,7 @@ public class CacheAdapterTest {
         return null;
       }
     };
-    Internal.instance.setCache(client, new CacheAdapter(responseCache));
+    setInternalCache(new CacheAdapter(responseCache));
 
     connection = new OkUrlFactory(client).open(serverUrl);
     connection.setRequestProperty("key", "value");
@@ -196,7 +199,7 @@ public class CacheAdapterTest {
         return null;
       }
     };
-    Internal.instance.setCache(client, new CacheAdapter(responseCache));
+    setInternalCache(new CacheAdapter(responseCache));
 
     connection = new OkUrlFactory(client).open(serverUrl);
 
@@ -214,7 +217,8 @@ public class CacheAdapterTest {
         assertEquals(serverUrl, connection.getURL());
 
         HttpsURLConnection cacheHttpsUrlConnection = (HttpsURLConnection) connection;
-        HttpsURLConnection realHttpsUrlConnection = (HttpsURLConnection) CacheAdapterTest.this.connection;
+        HttpsURLConnection realHttpsUrlConnection =
+            (HttpsURLConnection) CacheAdapterTest.this.connection;
         assertEquals(realHttpsUrlConnection.getCipherSuite(),
             cacheHttpsUrlConnection.getCipherSuite());
         assertEquals(realHttpsUrlConnection.getPeerPrincipal(),
@@ -228,9 +232,11 @@ public class CacheAdapterTest {
         return null;
       }
     };
-    Internal.instance.setCache(client, new CacheAdapter(responseCache));
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(hostnameVerifier);
+    setInternalCache(new CacheAdapter(responseCache));
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build();
 
     connection = new OkUrlFactory(client).open(serverUrl);
     executeGet(connection);
@@ -260,5 +266,11 @@ public class CacheAdapterTest {
     server.enqueue(mockResponse);
     server.start();
     return server.url("/").url();
+  }
+
+  private void setInternalCache(InternalCache internalCache) {
+    OkHttpClient.Builder builder = client.newBuilder();
+    Internal.instance.setCache(builder, internalCache);
+    client = builder.build();
   }
 }

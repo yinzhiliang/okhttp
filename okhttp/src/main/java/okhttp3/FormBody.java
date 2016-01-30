@@ -15,10 +15,10 @@
  */
 package okhttp3;
 
-import okhttp3.internal.Util;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import okhttp3.internal.Util;
 import okio.Buffer;
 import okio.BufferedSink;
 
@@ -72,8 +72,8 @@ public final class FormBody extends RequestBody {
 
   /**
    * Either writes this request to {@code sink} or measures its content length. We have one method
-   * do double-duty to make sure the counting and content are consistent, particularly when it
-   * comes to awkward operations like measuring the encoded length of header strings, or the
+   * do double-duty to make sure the counting and content are consistent, particularly when it comes
+   * to awkward operations like measuring the encoded length of header strings, or the
    * length-in-digits of an encoded integer.
    */
   private long writeOrCountBytes(BufferedSink sink, boolean countBytes) {
@@ -106,14 +106,14 @@ public final class FormBody extends RequestBody {
     private final List<String> values = new ArrayList<>();
 
     public Builder add(String name, String value) {
-      names.add(HttpUrl.canonicalize(name, FORM_ENCODE_SET, false, true, true));
-      values.add(HttpUrl.canonicalize(value, FORM_ENCODE_SET, false, true, true));
+      names.add(HttpUrl.canonicalize(name, FORM_ENCODE_SET, false, false, true, true));
+      values.add(HttpUrl.canonicalize(value, FORM_ENCODE_SET, false, false, true, true));
       return this;
     }
 
     public Builder addEncoded(String name, String value) {
-      names.add(HttpUrl.canonicalize(name, FORM_ENCODE_SET, true, true, true));
-      values.add(HttpUrl.canonicalize(value, FORM_ENCODE_SET, true, true, true));
+      names.add(HttpUrl.canonicalize(name, FORM_ENCODE_SET, true, false, true, true));
+      values.add(HttpUrl.canonicalize(value, FORM_ENCODE_SET, true, false, true, true));
       return this;
     }
 

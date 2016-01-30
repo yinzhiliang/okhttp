@@ -15,6 +15,14 @@
  */
 package okhttp3.ws;
 
+import java.io.IOException;
+import java.net.ProtocolException;
+import java.security.SecureRandom;
+import java.util.Collections;
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.ThreadPoolExecutor;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -26,14 +34,6 @@ import okhttp3.internal.Util;
 import okhttp3.internal.http.StreamAllocation;
 import okhttp3.internal.ws.RealWebSocket;
 import okhttp3.internal.ws.WebSocketProtocol;
-import java.io.IOException;
-import java.net.ProtocolException;
-import java.security.SecureRandom;
-import java.util.Collections;
-import java.util.Random;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.ThreadPoolExecutor;
 import okio.ByteString;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -64,11 +64,9 @@ public final class WebSocketCall {
     random.nextBytes(nonce);
     key = ByteString.of(nonce).base64();
 
-    // Copy the client. Otherwise changes (socket factory, redirect policy,
-    // etc.) may incorrectly be reflected in the request when it is executed.
-    client = client.clone();
-    // Force HTTP/1.1 until the WebSocket over HTTP/2 version is finalized.
-    client.setProtocols(Collections.singletonList(Protocol.HTTP_1_1));
+    client = client.newBuilder()
+        .protocols(Collections.singletonList(Protocol.HTTP_1_1))
+        .build();
 
     request = request.newBuilder()
         .header("Upgrade", "websocket")
@@ -83,8 +81,8 @@ public final class WebSocketCall {
   /**
    * Schedules the request to be executed at some point in the future.
    *
-   * <p>The {@link OkHttpClient#getDispatcher dispatcher} defines when the request will run:
-   * usually immediately unless there are several other requests currently being executed.
+   * <p>The {@link OkHttpClient#dispatcher dispatcher} defines when the request will run: usually
+   * immediately unless there are several other requests currently being executed.
    *
    * <p>This client will later call back {@code responseCallback} with either an HTTP response or a
    * failure exception. If you {@link #cancel} a request before it completes the callback will not
@@ -94,7 +92,7 @@ public final class WebSocketCall {
    */
   public void enqueue(final WebSocketListener listener) {
     Callback responseCallback = new Callback() {
-      @Override public void onResponse(Response response) throws IOException {
+      @Override public void onResponse(Call call, Response response) throws IOException {
         try {
           createWebSocket(response, listener);
         } catch (IOException e) {
@@ -102,7 +100,7 @@ public final class WebSocketCall {
         }
       }
 
-      @Override public void onFailure(Request request, IOException e) {
+      @Override public void onFailure(Call call, IOException e) {
         listener.onFailure(e, null);
       }
     };
@@ -182,7 +180,7 @@ public final class WebSocketCall {
     @Override protected void close() throws IOException {
       replyExecutor.shutdown();
       streamAllocation.noNewStreams();
-      streamAllocation.streamFinished(streamAllocation.stream());
+      streamAllocation.streamFinished(true, streamAllocation.stream());
     }
   }
 }

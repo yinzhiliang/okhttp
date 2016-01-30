@@ -15,13 +15,6 @@
  */
 package okhttp3.internal.http;
 
-import okhttp3.DelegatingServerSocketFactory;
-import okhttp3.DelegatingSocketFactory;
-import okhttp3.OkHttpClient;
-import okhttp3.OkUrlFactory;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
@@ -30,13 +23,17 @@ import java.net.HttpURLConnection;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.TimeUnit;
-
+import javax.net.ServerSocketFactory;
+import javax.net.SocketFactory;
+import okhttp3.DelegatingServerSocketFactory;
+import okhttp3.DelegatingSocketFactory;
+import okhttp3.OkHttpClient;
+import okhttp3.OkUrlFactory;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import okio.Buffer;
 import org.junit.Before;
 import org.junit.Test;
-
-import javax.net.ServerSocketFactory;
-import javax.net.SocketFactory;
 
 import static org.junit.Assert.fail;
 
@@ -49,11 +46,9 @@ public final class ThreadInterruptTest {
   private OkHttpClient client;
 
   @Before public void setUp() throws Exception {
-    server = new MockWebServer();
-    client = new OkHttpClient();
-
     // Sockets on some platforms can have large buffers that mean writes do not block when
     // required. These socket factories explicitly set the buffer sizes on sockets created.
+    server = new MockWebServer();
     server.setServerSocketFactory(
         new DelegatingServerSocketFactory(ServerSocketFactory.getDefault()) {
           @Override
@@ -63,14 +58,16 @@ public final class ThreadInterruptTest {
             return serverSocket;
           }
         });
-    client.setSocketFactory(new DelegatingSocketFactory(SocketFactory.getDefault()) {
-      @Override
-      protected Socket configureSocket(Socket socket) throws IOException {
-        socket.setSendBufferSize(SOCKET_BUFFER_SIZE);
-        socket.setReceiveBufferSize(SOCKET_BUFFER_SIZE);
-        return socket;
-      }
-    });
+    client = new OkHttpClient.Builder()
+        .socketFactory(new DelegatingSocketFactory(SocketFactory.getDefault()) {
+          @Override
+          protected Socket configureSocket(Socket socket) throws IOException {
+            socket.setSendBufferSize(SOCKET_BUFFER_SIZE);
+            socket.setReceiveBufferSize(SOCKET_BUFFER_SIZE);
+            return socket;
+          }
+        })
+        .build();
   }
 
   @Test public void interruptWritingRequestBody() throws Exception {

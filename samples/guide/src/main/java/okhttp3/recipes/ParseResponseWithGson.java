@@ -16,11 +16,11 @@
 package okhttp3.recipes;
 
 import com.google.gson.Gson;
+import java.io.IOException;
+import java.util.Map;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import java.io.IOException;
-import java.util.Map;
 
 public final class ParseResponseWithGson {
   private final OkHttpClient client = new OkHttpClient();
@@ -34,6 +34,8 @@ public final class ParseResponseWithGson {
     if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
 
     Gist gist = gson.fromJson(response.body().charStream(), Gist.class);
+    response.body().close();
+
     for (Map.Entry<String, GistFile> entry : gist.files.entrySet()) {
       System.out.println(entry.getKey());
       System.out.println(entry.getValue().content);

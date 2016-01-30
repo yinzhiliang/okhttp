@@ -15,15 +15,15 @@
  */
 package okhttp3.recipes;
 
+import java.io.IOException;
+import java.security.cert.Certificate;
+import java.util.Collections;
+import java.util.Set;
 import okhttp3.CertificatePinner;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import java.io.IOException;
-import java.security.cert.Certificate;
-import java.util.Collections;
-import java.util.Set;
 
 public final class CheckHandshake {
   /** Rejects otherwise-trusted certificates. */
@@ -31,7 +31,7 @@ public final class CheckHandshake {
     Set<String> blacklist = Collections.singleton("sha1/DmxUShsZuNiqPQsX2Oi9uv2sCnw=");
 
     @Override public Response intercept(Chain chain) throws IOException {
-      for (Certificate certificate : chain.connection().getHandshake().peerCertificates()) {
+      for (Certificate certificate : chain.connection().handshake().peerCertificates()) {
         String pin = CertificatePinner.pin(certificate);
         if (blacklist.contains(pin)) {
           throw new IOException("Blacklisted peer certificate: " + pin);
@@ -41,11 +41,9 @@ public final class CheckHandshake {
     }
   };
 
-  private final OkHttpClient client = new OkHttpClient();
-
-  public CheckHandshake() {
-    client.networkInterceptors().add(CHECK_HANDSHAKE_INTERCEPTOR);
-  }
+  private final OkHttpClient client = new OkHttpClient.Builder()
+      .addNetworkInterceptor(CHECK_HANDSHAKE_INTERCEPTOR)
+      .build();
 
   public void run() throws Exception {
     Request request = new Request.Builder()

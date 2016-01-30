@@ -19,7 +19,7 @@ awkward-to-reproduce situations like 500 errors or slow-loading responses.
 ### Example
 
 Use MockWebServer the same way that you use mocking frameworks like
-[Mockito](https://code.google.com/p/mockito/):
+[Mockito](https://github.com/mockito/mockito):
 
 1. Script the mocks.
 2. Run application code.
@@ -143,7 +143,7 @@ server.setDispatcher(dispatcher);
 Get MockWebServer via Maven:
 ```xml
 <dependency>
-  <groupId>com.squareup.okhttp</groupId>
+  <groupId>com.squareup.okhttp3</groupId>
   <artifactId>mockwebserver</artifactId>
   <version>(insert latest version)</version>
   <scope>test</scope>
@@ -152,7 +152,7 @@ Get MockWebServer via Maven:
 
 or via Gradle 
 ```groovy
-testCompile 'com.squareup.okhttp:mockwebserver:(insert latest version)'
+testCompile 'com.squareup.okhttp3:mockwebserver:(insert latest version)'
 ```
 
 ### License

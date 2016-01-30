@@ -1,18 +1,23 @@
 package okhttp3;
 
-import okhttp3.internal.http.OkHeaders;
-import okhttp3.internal.io.InMemoryFileSystem;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import okhttp3.internal.URLFilter;
+import okhttp3.internal.SslContextBuilder;
+import okhttp3.internal.http.OkHeaders;
+import okhttp3.internal.io.InMemoryFileSystem;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import okio.BufferedSource;
 import org.junit.After;
 import org.junit.Before;
@@ -33,9 +38,10 @@ public class OkUrlFactoryTest {
   private Cache cache;
 
   @Before public void setUp() throws IOException {
-    OkHttpClient client = new OkHttpClient();
     cache = new Cache(new File("/cache/"), 10 * 1024 * 1024, fileSystem);
-    client.setCache(cache);
+    OkHttpClient client = new OkHttpClient.Builder()
+        .cache(cache)
+        .build();
     factory = new OkUrlFactory(client);
   }
 
@@ -44,8 +50,8 @@ public class OkUrlFactoryTest {
   }
 
   /**
-   * Response code 407 should only come from proxy servers. Android's client
-   * throws if it is sent by an origin server.
+   * Response code 407 should only come from proxy servers. Android's client throws if it is sent by
+   * an origin server.
    */
   @Test public void originServerSends407() throws Exception {
     server.enqueue(new MockResponse().setResponseCode(407));
@@ -145,6 +151,66 @@ public class OkUrlFactoryTest {
     connection.setInstanceFollowRedirects(false);
     assertResponseBody(connection, "A");
     assertResponseCode(connection, 302);
+  }
+
+  @Test
+  public void testURLFilter() throws Exception {
+    server.enqueue(new MockResponse()
+        .setBody("B"));
+    final URL blockedURL = server.url("/a").url();
+    factory.setUrlFilter(new URLFilter() {
+      @Override
+      public void checkURLPermitted(URL url) throws IOException {
+        if (blockedURL.equals(url)) {
+          throw new IOException("Blocked");
+        }
+      }
+    });
+    try {
+      HttpURLConnection connection = factory.open(server.url("/a").url());
+      connection.getInputStream();
+      fail("Connection was successful");
+    } catch (IOException e) {
+      assertEquals("Blocked", e.getMessage());
+    }
+    HttpURLConnection connection = factory.open(server.url("/b").url());
+    assertResponseBody(connection, "B");
+  }
+
+  @Test
+  public void testURLFilterRedirect() throws Exception {
+    MockWebServer cleartextServer = new MockWebServer();
+    cleartextServer.enqueue(new MockResponse()
+        .setBody("Blocked!"));
+    final URL blockedURL = cleartextServer.url("/").url();
+
+    SSLContext context = SslContextBuilder.localhost();
+    server.useHttps(context.getSocketFactory(), false);
+    factory.setClient(factory.client().newBuilder()
+        .sslSocketFactory(context.getSocketFactory())
+        .followSslRedirects(true)
+        .build());
+    factory.setUrlFilter(new URLFilter() {
+      @Override
+      public void checkURLPermitted(URL url) throws IOException {
+        if (blockedURL.equals(url)) {
+          throw new IOException("Blocked");
+        }
+      }
+    });
+
+    server.enqueue(new MockResponse()
+        .setResponseCode(302)
+        .addHeader("Location: " + blockedURL)
+        .setBody("This page has moved"));
+    URL destination = server.url("/").url();
+    try {
+      HttpsURLConnection httpsConnection = (HttpsURLConnection) factory.open(destination);
+      httpsConnection.getInputStream();
+      fail("Connection was successful");
+    } catch (IOException e) {
+      assertEquals("Blocked", e.getMessage());
+    }
   }
 
   private void assertResponseBody(HttpURLConnection connection, String expected) throws Exception {

@@ -15,14 +15,6 @@
  */
 package okhttp3.benchmarks;
 
-import okhttp3.Callback;
-import okhttp3.Dispatcher;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okhttp3.internal.SslContextBuilder;
 import java.io.IOException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -32,6 +24,15 @@ import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocketFactory;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.Dispatcher;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okhttp3.internal.SslContextBuilder;
 
 class OkHttpAsync implements HttpClient {
   private static final boolean VERBOSE = false;
@@ -47,10 +48,11 @@ class OkHttpAsync implements HttpClient {
     concurrencyLevel = benchmark.concurrencyLevel;
     targetBacklog = benchmark.targetBacklog;
 
-    client = new OkHttpClient();
-    client.setProtocols(benchmark.protocols);
-    client.setDispatcher(new Dispatcher(new ThreadPoolExecutor(benchmark.concurrencyLevel,
-        benchmark.concurrencyLevel, 60, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>())));
+    client = new OkHttpClient.Builder()
+        .protocols(benchmark.protocols)
+        .dispatcher(new Dispatcher(new ThreadPoolExecutor(benchmark.concurrencyLevel,
+            benchmark.concurrencyLevel, 60, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>())))
+        .build();
 
     if (benchmark.tls) {
       SSLContext sslContext = SslContextBuilder.localhost();
@@ -60,16 +62,18 @@ class OkHttpAsync implements HttpClient {
           return true;
         }
       };
-      client.setSslSocketFactory(socketFactory);
-      client.setHostnameVerifier(hostnameVerifier);
+      client = client.newBuilder()
+          .sslSocketFactory(socketFactory)
+          .hostnameVerifier(hostnameVerifier)
+          .build();
     }
 
     callback = new Callback() {
-      @Override public void onFailure(Request request, IOException e) {
+      @Override public void onFailure(Call call, IOException e) {
         System.out.println("Failed: " + e);
       }
 
-      @Override public void onResponse(Response response) throws IOException {
+      @Override public void onResponse(Call call, Response response) throws IOException {
         ResponseBody body = response.body();
         long total = SynchronousHttpClient.readAllAndClose(body.byteStream());
         long finish = System.nanoTime();

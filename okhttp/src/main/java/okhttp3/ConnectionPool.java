@@ -16,11 +16,6 @@
  */
 package okhttp3;
 
-import okhttp3.internal.Internal;
-import okhttp3.internal.RouteDatabase;
-import okhttp3.internal.Util;
-import okhttp3.internal.http.StreamAllocation;
-import okhttp3.internal.io.RealConnection;
 import java.lang.ref.Reference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -28,67 +23,36 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Executor;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import okhttp3.internal.Internal;
+import okhttp3.internal.RouteDatabase;
+import okhttp3.internal.Util;
+import okhttp3.internal.http.StreamAllocation;
+import okhttp3.internal.io.RealConnection;
+
+import static okhttp3.internal.Util.closeQuietly;
 
 /**
- * Manages reuse of HTTP and SPDY connections for reduced network latency. HTTP
- * requests that share the same {@link Address} may share a
- * {@link Connection}. This class implements the policy of which connections to
- * keep open for future use.
- *
- * <p>The {@link #getDefault() system-wide default} uses system properties for
- * tuning parameters:
- * <ul>
- *     <li>{@code http.keepAlive} true if HTTP and SPDY connections should be
- *         pooled at all. Default is true.
- *     <li>{@code http.maxConnections} maximum number of idle connections to
- *         each to keep in the pool. Default is 5.
- *     <li>{@code http.keepAliveDuration} Time in milliseconds to keep the
- *         connection alive in the pool before closing it. Default is 5 minutes.
- *         This property isn't used by {@code HttpURLConnection}.
- * </ul>
- *
- * <p>The default instance <i>doesn't</i> adjust its configuration as system
- * properties are changed. This assumes that the applications that set these
- * parameters do so before making HTTP connections, and that this class is
- * initialized lazily.
+ * Manages reuse of HTTP and SPDY connections for reduced network latency. HTTP requests that share
+ * the same {@link Address} may share a {@link Connection}. This class implements the policy of
+ * which connections to keep open for future use.
  */
 public final class ConnectionPool {
-  private static final long DEFAULT_KEEP_ALIVE_DURATION_MS = 5 * 60 * 1000; // 5 min
-
-  private static final ConnectionPool systemDefault;
-
-  static {
-    String keepAlive = System.getProperty("http.keepAlive");
-    String keepAliveDuration = System.getProperty("http.keepAliveDuration");
-    String maxIdleConnections = System.getProperty("http.maxConnections");
-    long keepAliveDurationMs = keepAliveDuration != null
-        ? Long.parseLong(keepAliveDuration)
-        : DEFAULT_KEEP_ALIVE_DURATION_MS;
-    if (keepAlive != null && !Boolean.parseBoolean(keepAlive)) {
-      systemDefault = new ConnectionPool(0, keepAliveDurationMs);
-    } else if (maxIdleConnections != null) {
-      systemDefault = new ConnectionPool(Integer.parseInt(maxIdleConnections), keepAliveDurationMs);
-    } else {
-      systemDefault = new ConnectionPool(5, keepAliveDurationMs);
-    }
-  }
-
   /**
-   * A background thread is used to cleanup expired connections. There will be, at most, a single
-   * thread running per connection pool. We use a thread pool executor because it can shrink to
-   * zero threads, permitting this pool to be garbage collected.
+   * Background threads are used to cleanup expired connections. There will be at most a single
+   * thread running per connection pool. The thread pool executor permits the pool itself to be
+   * garbage collected.
    */
-  private final Executor executor = new ThreadPoolExecutor(
-      0 /* corePoolSize */, 1 /* maximumPoolSize */, 60L /* keepAliveTime */, TimeUnit.SECONDS,
-      new LinkedBlockingQueue<Runnable>(), Util.threadFactory("OkHttp ConnectionPool", true));
+  private static final Executor executor = new ThreadPoolExecutor(0 /* corePoolSize */,
+      Integer.MAX_VALUE /* maximumPoolSize */, 60L /* keepAliveTime */, TimeUnit.SECONDS,
+      new SynchronousQueue<Runnable>(), Util.threadFactory("OkHttp ConnectionPool", true));
 
   /** The maximum number of idle connections for each address. */
   private final int maxIdleConnections;
   private final long keepAliveDurationNs;
-  private Runnable cleanupRunnable = new Runnable() {
+  private final Runnable cleanupRunnable = new Runnable() {
     @Override public void run() {
       while (true) {
         long waitNanos = cleanup(System.nanoTime());
@@ -109,9 +73,15 @@ public final class ConnectionPool {
 
   private final Deque<RealConnection> connections = new ArrayDeque<>();
   final RouteDatabase routeDatabase = new RouteDatabase();
+  boolean cleanupRunning;
 
-  public ConnectionPool(int maxIdleConnections, long keepAliveDurationMs) {
-    this(maxIdleConnections, keepAliveDurationMs, TimeUnit.MILLISECONDS);
+  /**
+   * Create a new connection pool with tuning parameters appropriate for a single-user application.
+   * The tuning parameters in this pool are subject to change in future OkHttp releases. Currently
+   * this pool holds up to 5 idle connections which will be evicted after 5 minutes of inactivity.
+   */
+  public ConnectionPool() {
+    this(5, 5, TimeUnit.MINUTES);
   }
 
   public ConnectionPool(int maxIdleConnections, long keepAliveDuration, TimeUnit timeUnit) {
@@ -124,12 +94,8 @@ public final class ConnectionPool {
     }
   }
 
-  public static ConnectionPool getDefault() {
-    return systemDefault;
-  }
-
   /** Returns the number of idle connections in the pool. */
-  public synchronized int getIdleConnectionCount() {
+  public synchronized int idleConnectionCount() {
     int total = 0;
     for (RealConnection connection : connections) {
       if (connection.allocations.isEmpty()) total++;
@@ -139,36 +105,20 @@ public final class ConnectionPool {
 
   /**
    * Returns total number of connections in the pool. Note that prior to OkHttp 2.7 this included
-   * only idle connections and SPDY connections. In OkHttp 2.7 this includes all connections, both
-   * active and inactive. Use {@link #getIdleConnectionCount()} to count connections not currently
+   * only idle connections and SPDY connections. Since OkHttp 2.7 this includes all connections,
+   * both active and inactive. Use {@link #idleConnectionCount()} to count connections not currently
    * in use.
    */
-  public synchronized int getConnectionCount() {
+  public synchronized int connectionCount() {
     return connections.size();
-  }
-
-  /** Returns total number of multiplexed connections in the pool. */
-  public synchronized int getMultiplexedConnectionCount() {
-    int total = 0;
-    for (RealConnection connection : connections) {
-      if (connection.isMultiplexed()) total++;
-    }
-    return total;
-  }
-
-  /** Returns total number of http connections in the pool. */
-  public synchronized int getHttpConnectionCount() {
-    return connections.size() - getMultiplexedConnectionCount();
   }
 
   /** Returns a recycled connection to {@code address}, or null if no such connection exists. */
   RealConnection get(Address address, StreamAllocation streamAllocation) {
     assert (Thread.holdsLock(this));
     for (RealConnection connection : connections) {
-      // TODO(jwilson): this is awkward. We're already holding a lock on 'this', and
-      //     connection.allocationLimit() may also lock the FramedConnection.
-      if (connection.allocations.size() < connection.allocationLimit()
-          && address.equals(connection.getRoute().address)
+      if (connection.allocations.size() < connection.allocationLimit
+          && address.equals(connection.route().address)
           && !connection.noNewStreams) {
         streamAllocation.acquire(connection);
         return connection;
@@ -179,15 +129,16 @@ public final class ConnectionPool {
 
   void put(RealConnection connection) {
     assert (Thread.holdsLock(this));
-    if (connections.isEmpty()) {
+    if (!cleanupRunning) {
+      cleanupRunning = true;
       executor.execute(cleanupRunnable);
     }
     connections.add(connection);
   }
 
   /**
-   * Notify this pool that {@code connection} has become idle. Returns true if the connection
-   * has been removed from the pool and should be closed.
+   * Notify this pool that {@code connection} has become idle. Returns true if the connection has
+   * been removed from the pool and should be closed.
    */
   boolean connectionBecameIdle(RealConnection connection) {
     assert (Thread.holdsLock(this));
@@ -215,7 +166,7 @@ public final class ConnectionPool {
     }
 
     for (RealConnection connection : evictedConnections) {
-      Util.closeQuietly(connection.getSocket());
+      closeQuietly(connection.socket());
     }
   }
 
@@ -223,8 +174,8 @@ public final class ConnectionPool {
    * Performs maintenance on this pool, evicting the connection that has been idle the longest if
    * either it has exceeded the keep alive limit or the idle connections limit.
    *
-   * <p>Returns the duration in nanos to sleep until the next scheduled call to this method.
-   * Returns -1 if no further cleanups are required.
+   * <p>Returns the duration in nanos to sleep until the next scheduled call to this method. Returns
+   * -1 if no further cleanups are required.
    */
   long cleanup(long now) {
     int inUseConnectionCount = 0;
@@ -258,22 +209,20 @@ public final class ConnectionPool {
         // We've found a connection to evict. Remove it from the list, then close it below (outside
         // of the synchronized block).
         connections.remove(longestIdleConnection);
-
       } else if (idleConnectionCount > 0) {
         // A connection will be ready to evict soon.
         return keepAliveDurationNs - longestIdleDurationNs;
-
       } else if (inUseConnectionCount > 0) {
         // All connections are in use. It'll be at least the keep alive duration 'til we run again.
         return keepAliveDurationNs;
-
       } else {
         // No connections, idle or in use.
+        cleanupRunning = false;
         return -1;
       }
     }
 
-    Util.closeQuietly(longestIdleConnection.getSocket());
+    closeQuietly(longestIdleConnection.socket());
 
     // Cleanup again immediately.
     return 0;
@@ -296,7 +245,7 @@ public final class ConnectionPool {
       }
 
       // We've discovered a leaked allocation. This is an application bug.
-      Internal.logger.warning("A connection to " + connection.getRoute().address().url()
+      Internal.logger.warning("A connection to " + connection.route().address().url()
           + " was leaked. Did you forget to close a response body?");
       references.remove(i);
       connection.noNewStreams = true;
@@ -309,9 +258,5 @@ public final class ConnectionPool {
     }
 
     return references.size();
-  }
-
-  void setCleanupRunnableForTest(Runnable cleanupRunnable) {
-    this.cleanupRunnable = cleanupRunnable;
   }
 }

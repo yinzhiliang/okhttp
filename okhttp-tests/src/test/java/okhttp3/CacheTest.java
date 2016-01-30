@@ -16,16 +16,8 @@
 
 package okhttp3;
 
-import okhttp3.internal.Internal;
-import okhttp3.internal.SslContextBuilder;
-import okhttp3.internal.Util;
-import okhttp3.internal.io.InMemoryFileSystem;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
 import java.io.File;
 import java.io.IOException;
-import java.net.CookieHandler;
 import java.net.CookieManager;
 import java.net.HttpCookie;
 import java.net.HttpURLConnection;
@@ -47,6 +39,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
+import okhttp3.internal.Internal;
+import okhttp3.internal.SslContextBuilder;
+import okhttp3.internal.Util;
+import okhttp3.internal.io.InMemoryFileSystem;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.BufferedSource;
@@ -65,7 +64,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-/** Test caching with {@link OkUrlFactory}. */
 public final class CacheTest {
   private static final HostnameVerifier NULL_HOSTNAME_VERIFIER = new HostnameVerifier() {
     @Override public boolean verify(String s, SSLSession sslSession) {
@@ -78,20 +76,21 @@ public final class CacheTest {
   @Rule public InMemoryFileSystem fileSystem = new InMemoryFileSystem();
 
   private final SSLContext sslContext = SslContextBuilder.localhost();
-  private final OkHttpClient client = new OkHttpClient();
+  private OkHttpClient client;
   private Cache cache;
   private final CookieManager cookieManager = new CookieManager();
 
   @Before public void setUp() throws Exception {
     server.setProtocolNegotiationEnabled(false);
     cache = new Cache(new File("/cache/"), Integer.MAX_VALUE, fileSystem);
-    client.setCache(cache);
-    CookieHandler.setDefault(cookieManager);
+    client = new OkHttpClient.Builder()
+        .cache(cache)
+        .cookieJar(new JavaNetCookieJar(cookieManager))
+        .build();
   }
 
   @After public void tearDown() throws Exception {
     ResponseCache.setDefault(null);
-    CookieHandler.setDefault(null);
     cache.delete();
   }
 
@@ -107,45 +106,45 @@ public final class CacheTest {
     // assertCached(false, 100);
     assertCached(false, 101);
     assertCached(false, 102);
-    assertCached(true,  200);
+    assertCached(true, 200);
     assertCached(false, 201);
     assertCached(false, 202);
-    assertCached(true,  203);
-    assertCached(true,  204);
+    assertCached(true, 203);
+    assertCached(true, 204);
     assertCached(false, 205);
     assertCached(false, 206); //Electing to not cache partial responses
     assertCached(false, 207);
-    assertCached(true,  300);
-    assertCached(true,  301);
-    assertCached(true,  302);
+    assertCached(true, 300);
+    assertCached(true, 301);
+    assertCached(true, 302);
     assertCached(false, 303);
     assertCached(false, 304);
     assertCached(false, 305);
     assertCached(false, 306);
-    assertCached(true,  307);
-    assertCached(true,  308);
+    assertCached(true, 307);
+    assertCached(true, 308);
     assertCached(false, 400);
     assertCached(false, 401);
     assertCached(false, 402);
     assertCached(false, 403);
-    assertCached(true,  404);
-    assertCached(true,  405);
+    assertCached(true, 404);
+    assertCached(true, 405);
     assertCached(false, 406);
     assertCached(false, 408);
     assertCached(false, 409);
     // the HTTP spec permits caching 410s, but the RI doesn't.
-    assertCached(true,  410);
+    assertCached(true, 410);
     assertCached(false, 411);
     assertCached(false, 412);
     assertCached(false, 413);
-    assertCached(true,  414);
+    assertCached(true, 414);
     assertCached(false, 415);
     assertCached(false, 416);
     assertCached(false, 417);
     assertCached(false, 418);
 
     assertCached(false, 500);
-    assertCached(true,  501);
+    assertCached(true, 501);
     assertCached(false, 502);
     assertCached(false, 503);
     assertCached(false, 504);
@@ -225,8 +224,8 @@ public final class CacheTest {
     assertEquals("spiders", in1.readUtf8("spiders".length()));
     assertTrue(in1.exhausted());
     in1.close();
-    assertEquals(1, cache.getWriteSuccessCount());
-    assertEquals(0, cache.getWriteAbortCount());
+    assertEquals(1, cache.writeSuccessCount());
+    assertEquals(0, cache.writeAbortCount());
 
     Response response2 = client.newCall(request).execute();
     BufferedSource in2 = response2.body().source();
@@ -237,10 +236,10 @@ public final class CacheTest {
 
     assertTrue(in2.exhausted());
     in2.close();
-    assertEquals(1, cache.getWriteSuccessCount());
-    assertEquals(0, cache.getWriteAbortCount());
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(1, cache.getHitCount());
+    assertEquals(1, cache.writeSuccessCount());
+    assertEquals(0, cache.writeAbortCount());
+    assertEquals(2, cache.requestCount());
+    assertEquals(1, cache.hitCount());
   }
 
   @Test public void secureResponseCaching() throws IOException {
@@ -250,8 +249,10 @@ public final class CacheTest {
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
         .setBody("ABC"));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(NULL_HOSTNAME_VERIFIER);
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
+        .build();
 
     Request request = new Request.Builder().url(server.url("/")).build();
     Response response1 = client.newCall(request).execute();
@@ -268,9 +269,9 @@ public final class CacheTest {
     Response response2 = client.newCall(request).execute(); // Cached!
     assertEquals("ABC", response2.body().string());
 
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(1, cache.getHitCount());
+    assertEquals(2, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(1, cache.hitCount());
 
     assertEquals(cipherSuite, response2.handshake().cipherSuite());
     assertEquals(localCerts, response2.handshake().localCertificates());
@@ -299,9 +300,9 @@ public final class CacheTest {
     Response response2 = client.newCall(request).execute(); // Cached!
     assertEquals("ABC", response2.body().string());
 
-    assertEquals(4, cache.getRequestCount()); // 2 requests + 2 redirects
-    assertEquals(2, cache.getNetworkCount());
-    assertEquals(2, cache.getHitCount());
+    assertEquals(4, cache.requestCount()); // 2 requests + 2 redirects
+    assertEquals(2, cache.networkCount());
+    assertEquals(2, cache.hitCount());
   }
 
   @Test public void redirectToCachedResult() throws Exception {
@@ -351,8 +352,10 @@ public final class CacheTest {
     server.enqueue(new MockResponse()
         .setBody("DEF"));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(NULL_HOSTNAME_VERIFIER);
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
+        .build();
 
     Response response1 = get(server.url("/"));
     assertEquals("ABC", response1.body().string());
@@ -363,16 +366,15 @@ public final class CacheTest {
     assertEquals("ABC", response2.body().string());
     assertNotNull(response2.handshake().cipherSuite());
 
-    assertEquals(4, cache.getRequestCount()); // 2 direct + 2 redirect = 4
-    assertEquals(2, cache.getHitCount());
+    assertEquals(4, cache.requestCount()); // 2 direct + 2 redirect = 4
+    assertEquals(2, cache.hitCount());
     assertEquals(response1.handshake().cipherSuite(), response2.handshake().cipherSuite());
   }
 
   /**
-   * We've had bugs where caching and cross-protocol redirects yield class
-   * cast exceptions internal to the cache because we incorrectly assumed that
-   * HttpsURLConnection was always HTTPS and HttpURLConnection was always HTTP;
-   * in practice redirects mean that each can do either.
+   * We've had bugs where caching and cross-protocol redirects yield class cast exceptions internal
+   * to the cache because we incorrectly assumed that HttpsURLConnection was always HTTPS and
+   * HttpURLConnection was always HTTP; in practice redirects mean that each can do either.
    *
    * https://github.com/square/okhttp/issues/214
    */
@@ -391,8 +393,10 @@ public final class CacheTest {
         .setResponseCode(HttpURLConnection.HTTP_MOVED_PERM)
         .addHeader("Location: " + server2.url("/")));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(NULL_HOSTNAME_VERIFIER);
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
+        .build();
 
     Response response1 = get(server.url("/"));
     assertEquals("ABC", response1.body().string());
@@ -401,8 +405,8 @@ public final class CacheTest {
     Response response2 = get(server.url("/"));
     assertEquals("ABC", response2.body().string());
 
-    assertEquals(4, cache.getRequestCount()); // 2 direct + 2 redirect = 4
-    assertEquals(2, cache.getHitCount());
+    assertEquals(4, cache.requestCount()); // 2 direct + 2 redirect = 4
+    assertEquals(2, cache.hitCount());
   }
 
   @Test public void foundCachedWithExpiresHeader() throws Exception {
@@ -462,6 +466,26 @@ public final class CacheTest {
     assertEquals("b", get(url).body().string());
   }
 
+  /** https://github.com/square/okhttp/issues/2198 */
+  @Test public void cachedRedirect() throws IOException {
+    server.enqueue(new MockResponse()
+        .setResponseCode(301)
+        .addHeader("Cache-Control: max-age=60")
+        .addHeader("Location: /bar"));
+    server.enqueue(new MockResponse()
+        .setBody("ABC"));
+    server.enqueue(new MockResponse()
+        .setBody("ABC"));
+
+    Request request1 = new Request.Builder().url(server.url("/")).build();
+    Response response1 = client.newCall(request1).execute();
+    assertEquals("ABC", response1.body().string());
+
+    Request request2 = new Request.Builder().url(server.url("/")).build();
+    Response response2 = client.newCall(request2).execute();
+    assertEquals("ABC", response2.body().string());
+  }
+
   @Test public void serverDisconnectsPrematurelyWithContentLengthHeader() throws IOException {
     testServerPrematureDisconnect(TransferKind.FIXED_LENGTH);
   }
@@ -493,12 +517,12 @@ public final class CacheTest {
       bodySource.close();
     }
 
-    assertEquals(1, cache.getWriteAbortCount());
-    assertEquals(0, cache.getWriteSuccessCount());
+    assertEquals(1, cache.writeAbortCount());
+    assertEquals(0, cache.writeSuccessCount());
     Response response = get(server.url("/"));
     assertEquals("Request #2", response.body().string());
-    assertEquals(1, cache.getWriteAbortCount());
-    assertEquals(1, cache.getWriteSuccessCount());
+    assertEquals(1, cache.writeAbortCount());
+    assertEquals(1, cache.writeSuccessCount());
   }
 
   @Test public void clientPrematureDisconnectWithContentLengthHeader() throws IOException {
@@ -532,12 +556,12 @@ public final class CacheTest {
     } catch (IllegalStateException expected) {
     }
 
-    assertEquals(1, cache.getWriteAbortCount());
-    assertEquals(0, cache.getWriteSuccessCount());
+    assertEquals(1, cache.writeAbortCount());
+    assertEquals(0, cache.writeSuccessCount());
     Response response2 = get(server.url("/"));
     assertEquals("Request #2", response2.body().string());
-    assertEquals(1, cache.getWriteAbortCount());
-    assertEquals(1, cache.getWriteSuccessCount());
+    assertEquals(1, cache.writeAbortCount());
+    assertEquals(1, cache.writeSuccessCount());
   }
 
   @Test public void defaultExpirationDateFullyCachedForLessThan24Hours() throws Exception {
@@ -740,8 +764,8 @@ public final class CacheTest {
 
   private RequestBody requestBodyOrNull(String requestMethod) {
     return (requestMethod.equals("POST") || requestMethod.equals("PUT"))
-          ? RequestBody.create(MediaType.parse("text/plain"), "foo")
-          : null;
+        ? RequestBody.create(MediaType.parse("text/plain"), "foo")
+        : null;
   }
 
   @Test public void postInvalidatesCache() throws Exception {
@@ -1001,13 +1025,9 @@ public final class CacheTest {
         .clearHeaders()
         .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
-    ConnectionPool pool = ConnectionPool.getDefault();
-    pool.evictAll();
-    client.setConnectionPool(pool);
-
     assertEquals("A", get(server.url("/")).body().string());
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(1, client.getConnectionPool().getIdleConnectionCount());
+    assertEquals(1, client.connectionPool().idleConnectionCount());
   }
 
   @Test public void expiresDateBeforeModifiedDate() throws Exception {
@@ -1121,9 +1141,9 @@ public final class CacheTest {
     Response response = client.newCall(request).execute();
     assertTrue(response.body().source().exhausted());
     assertEquals(504, response.code());
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(0, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(1, cache.requestCount());
+    assertEquals(0, cache.networkCount());
+    assertEquals(0, cache.hitCount());
   }
 
   @Test public void requestOnlyIfCachedWithFullResponseCached() throws IOException {
@@ -1139,9 +1159,9 @@ public final class CacheTest {
         .build();
     Response response = client.newCall(request).execute();
     assertEquals("A", response.body().string());
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(1, cache.getHitCount());
+    assertEquals(2, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(1, cache.hitCount());
   }
 
   @Test public void requestOnlyIfCachedWithConditionalResponseCached() throws IOException {
@@ -1158,9 +1178,9 @@ public final class CacheTest {
     Response response = client.newCall(request).execute();
     assertTrue(response.body().source().exhausted());
     assertEquals(504, response.code());
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(2, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
   }
 
   @Test public void requestOnlyIfCachedWithUnhelpfulResponseCached() throws IOException {
@@ -1175,9 +1195,9 @@ public final class CacheTest {
     Response response = client.newCall(request).execute();
     assertTrue(response.body().source().exhausted());
     assertEquals(504, response.code());
-    assertEquals(2, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(2, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
   }
 
   @Test public void requestCacheControlNoCache() throws Exception {
@@ -1262,8 +1282,8 @@ public final class CacheTest {
   }
 
   /**
-   * For Last-Modified and Date headers, we should echo the date back in the
-   * exact format we were served.
+   * For Last-Modified and Date headers, we should echo the date back in the exact format we were
+   * served.
    */
   @Test public void retainServedDateFormat() throws Exception {
     // Serve a response with a non-standard date format that OkHttp supports.
@@ -1366,14 +1386,14 @@ public final class CacheTest {
         .setBody("C"));
 
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(1, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
     assertEquals("B", get(server.url("/")).body().string());
     assertEquals("C", get(server.url("/")).body().string());
-    assertEquals(3, cache.getRequestCount());
-    assertEquals(3, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(3, cache.requestCount());
+    assertEquals(3, cache.networkCount());
+    assertEquals(0, cache.hitCount());
   }
 
   @Test public void statisticsConditionalCacheHit() throws Exception {
@@ -1387,14 +1407,14 @@ public final class CacheTest {
         .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(1, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
     assertEquals("A", get(server.url("/")).body().string());
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(3, cache.getRequestCount());
-    assertEquals(3, cache.getNetworkCount());
-    assertEquals(2, cache.getHitCount());
+    assertEquals(3, cache.requestCount());
+    assertEquals(3, cache.networkCount());
+    assertEquals(2, cache.hitCount());
   }
 
   @Test public void statisticsFullCacheHit() throws Exception {
@@ -1403,14 +1423,14 @@ public final class CacheTest {
         .setBody("A"));
 
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(1, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(0, cache.getHitCount());
+    assertEquals(1, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(0, cache.hitCount());
     assertEquals("A", get(server.url("/")).body().string());
     assertEquals("A", get(server.url("/")).body().string());
-    assertEquals(3, cache.getRequestCount());
-    assertEquals(1, cache.getNetworkCount());
-    assertEquals(2, cache.getHitCount());
+    assertEquals(3, cache.requestCount());
+    assertEquals(1, cache.networkCount());
+    assertEquals(2, cache.hitCount());
   }
 
   @Test public void varyMatchesChangedRequestHeaderField() throws Exception {
@@ -1656,8 +1676,10 @@ public final class CacheTest {
     server.enqueue(new MockResponse()
         .setBody("B"));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(NULL_HOSTNAME_VERIFIER);
+    client = client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
+        .build();
 
     HttpUrl url = server.url("/");
     Request request1 = new Request.Builder()
@@ -1676,20 +1698,25 @@ public final class CacheTest {
   }
 
   @Test public void cachePlusCookies() throws Exception {
+    RecordingCookieJar cookieJar = new RecordingCookieJar();
+    client = client.newBuilder()
+        .cookieJar(cookieJar)
+        .build();
+
     server.enqueue(new MockResponse()
-        .addHeader("Set-Cookie: a=FIRST; domain=" + server.getCookieDomain() + ";")
+        .addHeader("Set-Cookie: a=FIRST")
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Cache-Control: max-age=0")
         .setBody("A"));
     server.enqueue(new MockResponse()
-        .addHeader("Set-Cookie: a=SECOND; domain=" + server.getCookieDomain() + ";")
+        .addHeader("Set-Cookie: a=SECOND")
         .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
     HttpUrl url = server.url("/");
     assertEquals("A", get(url).body().string());
-    assertCookies(url, "a=FIRST");
+    cookieJar.assertResponseCookies("a=FIRST; path=/");
     assertEquals("A", get(url).body().string());
-    assertCookies(url, "a=SECOND");
+    cookieJar.assertResponseCookies("a=SECOND; path=/");
   }
 
   @Test public void getHeadersReturnsNetworkEndToEndHeaders() throws Exception {
@@ -1774,7 +1801,7 @@ public final class CacheTest {
     assertEquals(Arrays.asList(expectedCookies), actualCookies);
   }
 
-  @Test public void doNotCachePartialResponse() throws Exception  {
+  @Test public void doNotCachePartialResponse() throws Exception {
     assertNotCached(new MockResponse()
         .setResponseCode(HttpURLConnection.HTTP_PARTIAL)
         .addHeader("Date: " + formatDate(0, TimeUnit.HOURS))
@@ -1877,10 +1904,9 @@ public final class CacheTest {
   }
 
   /**
-   * Old implementations of OkHttp's response cache wrote header fields like
-   * ":status: 200 OK". This broke our cached response parser because it split
-   * on the first colon. This regression test exists to help us read these old
-   * bad cache entries.
+   * Old implementations of OkHttp's response cache wrote header fields like ":status: 200 OK". This
+   * broke our cached response parser because it split on the first colon. This regression test
+   * exists to help us read these old bad cache entries.
    *
    * https://github.com/square/okhttp/issues/227
    */
@@ -1924,16 +1950,151 @@ public final class CacheTest {
         + "2\n"
         + "\n"
         + "CLEAN " + urlKey + " " + entryMetadata.length() + " " + entryBody.length() + "\n";
-    writeFile(cache.getDirectory(), urlKey + ".0", entryMetadata);
-    writeFile(cache.getDirectory(), urlKey + ".1", entryBody);
-    writeFile(cache.getDirectory(), "journal", journalBody);
-    cache = new Cache(cache.getDirectory(), Integer.MAX_VALUE, fileSystem);
-    client.setCache(cache);
+    writeFile(cache.directory(), urlKey + ".0", entryMetadata);
+    writeFile(cache.directory(), urlKey + ".1", entryBody);
+    writeFile(cache.directory(), "journal", journalBody);
+    cache = new Cache(cache.directory(), Integer.MAX_VALUE, fileSystem);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
 
     Response response = get(url);
     assertEquals(entryBody, response.body().string());
     assertEquals("3", response.header("Content-Length"));
     assertEquals("foo", response.header("etag"));
+  }
+
+  /** Exercise the cache format in OkHttp 2.7 and all earlier releases. */
+  @Test public void testGoldenCacheHttpsResponseOkHttp27() throws Exception {
+    HttpUrl url = server.url("/");
+    String urlKey = Util.md5Hex(url.toString());
+    String entryMetadata = ""
+        + "" + url + "\n"
+        + "GET\n"
+        + "0\n"
+        + "HTTP/1.1 200 OK\n"
+        + "4\n"
+        + "Content-Length: 3\n"
+        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n"
+        + "Cache-Control: max-age=60\n"
+        + "\n"
+        + "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n"
+        + "1\n"
+        + "MIIBnDCCAQWgAwIBAgIBATANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDEwlsb2NhbGhvc3QwHhcNMTUxMjIyMDEx"
+        + "MTQwWhcNMTUxMjIzMDExMTQwWjAUMRIwEAYDVQQDEwlsb2NhbGhvc3QwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJ"
+        + "AoGBAJTn2Dh8xYmegvpOSmsKb2Os6Cxf1L4fYbnHr/turInUD5r1P7ZAuxurY880q3GT5bUDoirS3IfucddrT1Ac"
+        + "AmUzEmk/FDjggiP8DlxFkY/XwXBlhRDVIp/mRuASPMGInckc0ZaixOkRFyrxADj+r1eaSmXCIvV5yTY6IaIokLj1"
+        + "AgMBAAEwDQYJKoZIhvcNAQELBQADgYEAFblnedqtfRqI9j2WDyPPoG0NTZf9xwjeUu+ju+Ktty8u9k7Lgrrd/DH2"
+        + "mQEtBD1Ctvp91MJfAClNg3faZzwClUyu5pd0QXRZEUwSwZQNen2QWDHRlVsItclBJ4t+AJLqTbwofWi4m4K8REOl"
+        + "593hD55E4+lY22JZiVQyjsQhe6I=\n"
+        + "0\n";
+    String entryBody = "abc";
+    String journalBody = ""
+        + "libcore.io.DiskLruCache\n"
+        + "1\n"
+        + "201105\n"
+        + "2\n"
+        + "\n"
+        + "DIRTY " + urlKey + "\n"
+        + "CLEAN " + urlKey + " " + entryMetadata.length() + " " + entryBody.length() + "\n";
+    writeFile(cache.directory(), urlKey + ".0", entryMetadata);
+    writeFile(cache.directory(), urlKey + ".1", entryBody);
+    writeFile(cache.directory(), "journal", journalBody);
+    cache.close();
+    cache = new Cache(cache.directory(), Integer.MAX_VALUE, fileSystem);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
+
+    Response response = get(url);
+    assertEquals(entryBody, response.body().string());
+    assertEquals("3", response.header("Content-Length"));
+  }
+
+  /** The TLS version is present in OkHttp 3.0 and beyond. */
+  @Test public void testGoldenCacheHttpsResponseOkHttp30() throws Exception {
+    HttpUrl url = server.url("/");
+    String urlKey = Util.md5Hex(url.toString());
+    String entryMetadata = ""
+        + "" + url + "\n"
+        + "GET\n"
+        + "0\n"
+        + "HTTP/1.1 200 OK\n"
+        + "4\n"
+        + "Content-Length: 3\n"
+        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n"
+        + "Cache-Control: max-age=60\n"
+        + "\n"
+        + "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n"
+        + "1\n"
+        + "MIIBnDCCAQWgAwIBAgIBATANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDEwlsb2NhbGhvc3QwHhcNMTUxMjIyMDEx"
+        + "MTQwWhcNMTUxMjIzMDExMTQwWjAUMRIwEAYDVQQDEwlsb2NhbGhvc3QwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJ"
+        + "AoGBAJTn2Dh8xYmegvpOSmsKb2Os6Cxf1L4fYbnHr/turInUD5r1P7ZAuxurY880q3GT5bUDoirS3IfucddrT1Ac"
+        + "AmUzEmk/FDjggiP8DlxFkY/XwXBlhRDVIp/mRuASPMGInckc0ZaixOkRFyrxADj+r1eaSmXCIvV5yTY6IaIokLj1"
+        + "AgMBAAEwDQYJKoZIhvcNAQELBQADgYEAFblnedqtfRqI9j2WDyPPoG0NTZf9xwjeUu+ju+Ktty8u9k7Lgrrd/DH2"
+        + "mQEtBD1Ctvp91MJfAClNg3faZzwClUyu5pd0QXRZEUwSwZQNen2QWDHRlVsItclBJ4t+AJLqTbwofWi4m4K8REOl"
+        + "593hD55E4+lY22JZiVQyjsQhe6I=\n"
+        + "0\n"
+        + "TLSv1.2\n";
+    String entryBody = "abc";
+    String journalBody = ""
+        + "libcore.io.DiskLruCache\n"
+        + "1\n"
+        + "201105\n"
+        + "2\n"
+        + "\n"
+        + "DIRTY " + urlKey + "\n"
+        + "CLEAN " + urlKey + " " + entryMetadata.length() + " " + entryBody.length() + "\n";
+    writeFile(cache.directory(), urlKey + ".0", entryMetadata);
+    writeFile(cache.directory(), urlKey + ".1", entryBody);
+    writeFile(cache.directory(), "journal", journalBody);
+    cache.close();
+    cache = new Cache(cache.directory(), Integer.MAX_VALUE, fileSystem);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
+
+    Response response = get(url);
+    assertEquals(entryBody, response.body().string());
+    assertEquals("3", response.header("Content-Length"));
+  }
+
+  @Test public void testGoldenCacheHttpResponseOkHttp30() throws Exception {
+    HttpUrl url = server.url("/");
+    String urlKey = Util.md5Hex(url.toString());
+    String entryMetadata = ""
+        + "" + url + "\n"
+        + "GET\n"
+        + "0\n"
+        + "HTTP/1.1 200 OK\n"
+        + "4\n"
+        + "Cache-Control: max-age=60\n"
+        + "Content-Length: 3\n"
+        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n";
+    String entryBody = "abc";
+    String journalBody = ""
+        + "libcore.io.DiskLruCache\n"
+        + "1\n"
+        + "201105\n"
+        + "2\n"
+        + "\n"
+        + "DIRTY " + urlKey + "\n"
+        + "CLEAN " + urlKey + " " + entryMetadata.length() + " " + entryBody.length() + "\n";
+    writeFile(cache.directory(), urlKey + ".0", entryMetadata);
+    writeFile(cache.directory(), urlKey + ".1", entryBody);
+    writeFile(cache.directory(), "journal", journalBody);
+    cache.close();
+    cache = new Cache(cache.directory(), Integer.MAX_VALUE, fileSystem);
+    client = client.newBuilder()
+        .cache(cache)
+        .build();
+
+    Response response = get(url);
+    assertEquals(entryBody, response.body().string());
+    assertEquals("3", response.header("Content-Length"));
   }
 
   @Test public void evictAll() throws Exception {
@@ -1945,8 +2106,8 @@ public final class CacheTest {
 
     HttpUrl url = server.url("/");
     assertEquals("A", get(url).body().string());
-    client.getCache().evictAll();
-    assertEquals(0, client.getCache().getSize());
+    client.cache().evictAll();
+    assertEquals(0, client.cache().size());
     assertEquals("B", get(url).body().string());
   }
 
@@ -1962,12 +2123,13 @@ public final class CacheTest {
     assertEquals("A", get(url).body().string());
 
     final AtomicReference<String> ifNoneMatch = new AtomicReference<>();
-    client.networkInterceptors().add(new Interceptor() {
-      @Override public Response intercept(Chain chain) throws IOException {
-        ifNoneMatch.compareAndSet(null, chain.request().header("If-None-Match"));
-        return chain.proceed(chain.request());
-      }
-    });
+    client = client.newBuilder()
+        .addNetworkInterceptor(new Interceptor() {
+          @Override public Response intercept(Chain chain) throws IOException {
+            ifNoneMatch.compareAndSet(null, chain.request().header("If-None-Match"));
+            return chain.proceed(chain.request());
+          }
+        }).build();
 
     // Confirm the value is cached and intercepted.
     assertEquals("A", get(url).body().string());
@@ -1984,11 +2146,12 @@ public final class CacheTest {
     assertEquals("A", get(url).body().string());
 
     // Confirm the interceptor isn't exercised.
-    client.networkInterceptors().add(new Interceptor() {
-      @Override public Response intercept(Chain chain) throws IOException {
-        throw new AssertionError();
-      }
-    });
+    client = client.newBuilder()
+        .addNetworkInterceptor(new Interceptor() {
+          @Override public Response intercept(Chain chain) throws IOException {
+            throw new AssertionError();
+          }
+        }).build();
     assertEquals("A", get(url).body().string());
   }
 
@@ -2151,7 +2314,6 @@ public final class CacheTest {
     return client.newCall(request).execute();
   }
 
-
   private void writeFile(File directory, String file, String content) throws IOException {
     BufferedSink sink = Okio.buffer(fileSystem.sink(new File(directory, file)));
     sink.writeUtf8(content);
@@ -2159,9 +2321,8 @@ public final class CacheTest {
   }
 
   /**
-   * @param delta the offset from the current date to use. Negative
-   * values yield dates in the past; positive values yield dates in the
-   * future.
+   * @param delta the offset from the current date to use. Negative values yield dates in the past;
+   * positive values yield dates in the future.
    */
   private String formatDate(long delta, TimeUnit timeUnit) {
     return formatDate(new Date(System.currentTimeMillis() + timeUnit.toMillis(delta)));
@@ -2231,9 +2392,8 @@ public final class CacheTest {
   }
 
   /**
-   * Shortens the body of {@code response} but not the corresponding headers.
-   * Only useful to test how clients respond to the premature conclusion of
-   * the HTTP body.
+   * Shortens the body of {@code response} but not the corresponding headers. Only useful to test
+   * how clients respond to the premature conclusion of the HTTP body.
    */
   private MockResponse truncateViolently(MockResponse response, int numBytesToKeep) {
     response.setSocketPolicy(DISCONNECT_AT_END);

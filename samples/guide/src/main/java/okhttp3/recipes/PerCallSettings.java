@@ -15,11 +15,11 @@
  */
 package okhttp3.recipes;
 
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import java.io.IOException;
-import java.util.concurrent.TimeUnit;
 
 public final class PerCallSettings {
   private final OkHttpClient client = new OkHttpClient();
@@ -30,20 +30,24 @@ public final class PerCallSettings {
         .build();
 
     try {
-      OkHttpClient cloned = client.clone(); // Clone to make a customized OkHttp for this request.
-      cloned.setReadTimeout(500, TimeUnit.MILLISECONDS);
+      // Copy to customize OkHttp for this request.
+      OkHttpClient copy = client.newBuilder()
+          .readTimeout(500, TimeUnit.MILLISECONDS)
+          .build();
 
-      Response response = cloned.newCall(request).execute();
+      Response response = copy.newCall(request).execute();
       System.out.println("Response 1 succeeded: " + response);
     } catch (IOException e) {
       System.out.println("Response 1 failed: " + e);
     }
 
     try {
-      OkHttpClient cloned = client.clone(); // Clone to make a customized OkHttp for this request.
-      cloned.setReadTimeout(3000, TimeUnit.MILLISECONDS);
+      // Copy to customize OkHttp for this request.
+      OkHttpClient copy = client.newBuilder()
+          .readTimeout(3000, TimeUnit.MILLISECONDS)
+          .build();
 
-      Response response = cloned.newCall(request).execute();
+      Response response = copy.newCall(request).execute();
       System.out.println("Response 2 succeeded: " + response);
     } catch (IOException e) {
       System.out.println("Response 2 failed: " + e);

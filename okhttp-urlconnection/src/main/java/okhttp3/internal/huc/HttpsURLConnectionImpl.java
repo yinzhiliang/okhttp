@@ -16,17 +16,22 @@
  */
 package okhttp3.internal.huc;
 
-import okhttp3.Handshake;
-import okhttp3.OkHttpClient;
 import java.net.URL;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLSocketFactory;
+import okhttp3.Handshake;
+import okhttp3.OkHttpClient;
+import okhttp3.internal.URLFilter;
 
 public final class HttpsURLConnectionImpl extends DelegatingHttpsURLConnection {
   private final HttpURLConnectionImpl delegate;
 
   public HttpsURLConnectionImpl(URL url, OkHttpClient client) {
     this(new HttpURLConnectionImpl(url, client));
+  }
+
+  public HttpsURLConnectionImpl(URL url, OkHttpClient client, URLFilter filter) {
+    this(new HttpURLConnectionImpl(url, client, filter));
   }
 
   public HttpsURLConnectionImpl(HttpURLConnectionImpl delegate) {
@@ -48,19 +53,23 @@ public final class HttpsURLConnectionImpl extends DelegatingHttpsURLConnection {
   }
 
   @Override public void setHostnameVerifier(HostnameVerifier hostnameVerifier) {
-    delegate.client.setHostnameVerifier(hostnameVerifier);
+    delegate.client = delegate.client.newBuilder()
+        .hostnameVerifier(hostnameVerifier)
+        .build();
   }
 
   @Override public HostnameVerifier getHostnameVerifier() {
-    return delegate.client.getHostnameVerifier();
+    return delegate.client.hostnameVerifier();
   }
 
   @Override public void setSSLSocketFactory(SSLSocketFactory sslSocketFactory) {
-    delegate.client.setSslSocketFactory(sslSocketFactory);
+    delegate.client = delegate.client.newBuilder()
+        .sslSocketFactory(sslSocketFactory)
+        .build();
   }
 
   @Override public SSLSocketFactory getSSLSocketFactory() {
-    return delegate.client.getSslSocketFactory();
+    return delegate.client.sslSocketFactory();
   }
 
   @Override public long getContentLengthLong() {

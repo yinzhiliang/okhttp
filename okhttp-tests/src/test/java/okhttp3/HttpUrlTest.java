@@ -108,6 +108,22 @@ public final class HttpUrlTest {
     assertEquals(null, HttpUrl.parse("#fragment"));
   }
 
+  @Test public void newBuilderResolve() throws Exception {
+    // Non-exhaustive tests because implementation is the same as resolve.
+    HttpUrl base = HttpUrl.parse("http://host/a/b");
+    assertEquals(HttpUrl.parse("https://host2/"), base.newBuilder("https://host2").build());
+    assertEquals(HttpUrl.parse("http://host2/"), base.newBuilder("//host2").build());
+    assertEquals(HttpUrl.parse("http://host/path"), base.newBuilder("/path").build());
+    assertEquals(HttpUrl.parse("http://host/a/path"), base.newBuilder("path").build());
+    assertEquals(HttpUrl.parse("http://host/a/b?query"), base.newBuilder("?query").build());
+    assertEquals(HttpUrl.parse("http://host/a/b#fragment"), base.newBuilder("#fragment").build());
+    assertEquals(HttpUrl.parse("http://host/a/b"), base.newBuilder("").build());
+    assertEquals(null, base.newBuilder("ftp://b"));
+    assertEquals(null, base.newBuilder("ht+tp://b"));
+    assertEquals(null, base.newBuilder("ht-tp://b"));
+    assertEquals(null, base.newBuilder("ht.tp://b"));
+  }
+
   @Test public void resolveNoScheme() throws Exception {
     HttpUrl base = HttpUrl.parse("http://host/a/b");
     assertEquals(HttpUrl.parse("http://host2/"), base.resolve("//host2"));
@@ -483,12 +499,7 @@ public final class HttpUrlTest {
     assertEquals("http://host/#\u0080", url.toString());
     assertEquals("\u0080", url.fragment());
     assertEquals("\u0080", url.encodedFragment());
-    try {
-      url.uri();
-      fail();
-    } catch (IllegalStateException expected) {
-      // Possibly a bug in java.net.URI. Many non-ASCII code points work, this one doesn't!
-    }
+    assertEquals(new URI("http://host/#"), url.uri()); // Control characters may be stripped!
   }
 
   @Test public void fragmentPercentEncodedNonAscii() throws Exception {
@@ -1017,7 +1028,7 @@ public final class HttpUrlTest {
     assertEquals("http://host/=[]:;%22~%7C%3F%23@%5E%2F$%25*", url.toString());
     assertEquals("http://host/=%5B%5D:;%22~%7C%3F%23@%5E%2F$%25*", url.uri().toString());
   }
-  
+
   @Test public void toUriQueryParameterNameSpecialCharacters() throws Exception {
     HttpUrl url = new HttpUrl.Builder()
         .scheme("http")
@@ -1058,19 +1069,46 @@ public final class HttpUrlTest {
     assertEquals("http://host/#=[]:;%22~%7C?%23@%5E/$%25*", url.uri().toString());
   }
 
-  @Test public void toUriWithMalformedPercentEscape() throws Exception {
-    HttpUrl url = new HttpUrl.Builder()
-        .scheme("http")
-        .host("host")
-        .encodedPath("/%xx")
-        .build();
-    assertEquals("http://host/%xx", url.toString());
-    try {
-      url.uri();
-      fail();
-    } catch (IllegalStateException expected) {
-      assertEquals("not valid as a java.net.URI: http://host/%xx", expected.getMessage());
-    }
+  @Test public void toUriWithControlCharacters() throws Exception {
+    // Percent-encoded in the path.
+    assertEquals(new URI("http://host/a%00b"), HttpUrl.parse("http://host/a\u0000b").uri());
+    assertEquals(new URI("http://host/a%C2%80b"), HttpUrl.parse("http://host/a\u0080b").uri());
+    assertEquals(new URI("http://host/a%C2%9Fb"), HttpUrl.parse("http://host/a\u009fb").uri());
+    // Percent-encoded in the query.
+    assertEquals(new URI("http://host/?a%00b"), HttpUrl.parse("http://host/?a\u0000b").uri());
+    assertEquals(new URI("http://host/?a%C2%80b"), HttpUrl.parse("http://host/?a\u0080b").uri());
+    assertEquals(new URI("http://host/?a%C2%9Fb"), HttpUrl.parse("http://host/?a\u009fb").uri());
+    // Stripped from the fragment.
+    assertEquals(new URI("http://host/#a%00b"), HttpUrl.parse("http://host/#a\u0000b").uri());
+    assertEquals(new URI("http://host/#ab"), HttpUrl.parse("http://host/#a\u0080b").uri());
+    assertEquals(new URI("http://host/#ab"), HttpUrl.parse("http://host/#a\u009fb").uri());
+  }
+
+  @Test public void toUriWithSpaceCharacters() throws Exception {
+    // Percent-encoded in the path.
+    assertEquals(new URI("http://host/a%0Bb"), HttpUrl.parse("http://host/a\u000bb").uri());
+    assertEquals(new URI("http://host/a%20b"), HttpUrl.parse("http://host/a b").uri());
+    assertEquals(new URI("http://host/a%E2%80%89b"), HttpUrl.parse("http://host/a\u2009b").uri());
+    assertEquals(new URI("http://host/a%E3%80%80b"), HttpUrl.parse("http://host/a\u3000b").uri());
+    // Percent-encoded in the query.
+    assertEquals(new URI("http://host/?a%0Bb"), HttpUrl.parse("http://host/?a\u000bb").uri());
+    assertEquals(new URI("http://host/?a%20b"), HttpUrl.parse("http://host/?a b").uri());
+    assertEquals(new URI("http://host/?a%E2%80%89b"), HttpUrl.parse("http://host/?a\u2009b").uri());
+    assertEquals(new URI("http://host/?a%E3%80%80b"), HttpUrl.parse("http://host/?a\u3000b").uri());
+    // Stripped from the fragment.
+    assertEquals(new URI("http://host/#a%0Bb"), HttpUrl.parse("http://host/#a\u000bb").uri());
+    assertEquals(new URI("http://host/#a%20b"), HttpUrl.parse("http://host/#a b").uri());
+    assertEquals(new URI("http://host/#ab"), HttpUrl.parse("http://host/#a\u2009b").uri());
+    assertEquals(new URI("http://host/#ab"), HttpUrl.parse("http://host/#a\u3000b").uri());
+  }
+
+  @Test public void toUriWithNonHexPercentEscape() throws Exception {
+    assertEquals(new URI("http://host/%25xx"), HttpUrl.parse("http://host/%xx").uri());
+  }
+
+  @Test public void toUriWithTruncatedPercentEscape() throws Exception {
+    assertEquals(new URI("http://host/%25a"), HttpUrl.parse("http://host/%a").uri());
+    assertEquals(new URI("http://host/%25"), HttpUrl.parse("http://host/%").uri());
   }
 
   @Test public void fromJavaNetUrl() throws Exception {
@@ -1285,8 +1323,8 @@ public final class HttpUrlTest {
   }
 
   /**
-   * Although HttpUrl prefers percent-encodings in uppercase, it should preserve the exact
-   * structure of the original encoding.
+   * Although HttpUrl prefers percent-encodings in uppercase, it should preserve the exact structure
+   * of the original encoding.
    */
   @Test public void rawEncodingRetained() throws Exception {
     String urlString = "http://%6d%6D:%6d%6D@host/%6d%6D?%6d%6D#%6d%6D";

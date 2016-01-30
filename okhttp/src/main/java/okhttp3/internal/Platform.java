@@ -17,8 +17,8 @@
 package okhttp3.internal;
 
 import android.util.Log;
-import okhttp3.Protocol;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -30,6 +30,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
 import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.X509TrustManager;
+import okhttp3.Protocol;
 import okio.Buffer;
 
 import static okhttp3.internal.Internal.logger;
@@ -38,19 +41,28 @@ import static okhttp3.internal.Internal.logger;
  * Access to platform-specific features.
  *
  * <h3>Server name indication (SNI)</h3>
- * Supported on Android 2.3+.
+ *
+ * <p>Supported on Android 2.3+.
  *
  * <h3>Session Tickets</h3>
- * Supported on Android 2.3+.
+ *
+ * <p>Supported on Android 2.3+.
  *
  * <h3>Android Traffic Stats (Socket Tagging)</h3>
- * Supported on Android 4.0+.
+ *
+ * <p>Supported on Android 4.0+.
  *
  * <h3>ALPN (Application Layer Protocol Negotiation)</h3>
- * Supported on Android 5.0+. The APIs were present in Android 4.4, but that implementation was
+ *
+ * <p>Supported on Android 5.0+. The APIs were present in Android 4.4, but that implementation was
  * unstable.
  *
  * Supported on OpenJDK 7 and 8 (via the JettyALPN-boot library).
+ *
+ * <h3>Trust Manager Extraction</h3>
+ *
+ * <p>Supported on Android 2.3+ and OpenJDK 7+. There are no public APIs to recover the trust
+ * manager that was used to create an {@link SSLSocketFactory}.
  */
 public class Platform {
   private static final Platform PLATFORM = findPlatform();
@@ -74,11 +86,14 @@ public class Platform {
   public void untagSocket(Socket socket) throws SocketException {
   }
 
+  public X509TrustManager trustManager(SSLSocketFactory sslSocketFactory) {
+    return null;
+  }
+
   /**
    * Configure TLS extensions on {@code sslSocket} for {@code route}.
    *
-   * @param hostname non-null for client-side handshakes; null for
-   *     server-side handshakes.
+   * @param hostname non-null for client-side handshakes; null for server-side handshakes.
    */
   public void configureTlsExtensions(SSLSocket sslSocket, String hostname,
       List<Protocol> protocols) {
@@ -109,11 +124,13 @@ public class Platform {
   private static Platform findPlatform() {
     // Attempt to find Android 2.3+ APIs.
     try {
+      Class<?> sslParametersClass;
       try {
-        Class.forName("com.android.org.conscrypt.OpenSSLSocketImpl");
+        sslParametersClass = Class.forName("com.android.org.conscrypt.SSLParametersImpl");
       } catch (ClassNotFoundException e) {
         // Older platform before being unbundled.
-        Class.forName("org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl");
+        sslParametersClass = Class.forName(
+            "org.apache.harmony.xnet.provider.jsse.SSLParametersImpl");
       }
 
       OptionalMethod<Socket> setUseSessionTickets
@@ -141,25 +158,34 @@ public class Platform {
       } catch (ClassNotFoundException | NoSuchMethodException ignored) {
       }
 
-      return new Android(setUseSessionTickets, setHostname, trafficStatsTagSocket,
-          trafficStatsUntagSocket, getAlpnSelectedProtocol, setAlpnProtocols);
+      return new Android(sslParametersClass, setUseSessionTickets, setHostname,
+          trafficStatsTagSocket, trafficStatsUntagSocket, getAlpnSelectedProtocol,
+          setAlpnProtocols);
     } catch (ClassNotFoundException ignored) {
       // This isn't an Android runtime.
     }
 
-    // Find Jetty's ALPN extension for OpenJDK.
+    // Find an Oracle JDK.
     try {
-      String negoClassName = "org.eclipse.jetty.alpn.ALPN";
-      Class<?> negoClass = Class.forName(negoClassName);
-      Class<?> providerClass = Class.forName(negoClassName + "$Provider");
-      Class<?> clientProviderClass = Class.forName(negoClassName + "$ClientProvider");
-      Class<?> serverProviderClass = Class.forName(negoClassName + "$ServerProvider");
-      Method putMethod = negoClass.getMethod("put", SSLSocket.class, providerClass);
-      Method getMethod = negoClass.getMethod("get", SSLSocket.class);
-      Method removeMethod = negoClass.getMethod("remove", SSLSocket.class);
-      return new JdkWithJettyBootPlatform(
-          putMethod, getMethod, removeMethod, clientProviderClass, serverProviderClass);
-    } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+      Class<?> sslContextClass = Class.forName("sun.security.ssl.SSLContextImpl");
+
+      // Find Jetty's ALPN extension for OpenJDK.
+      try {
+        String negoClassName = "org.eclipse.jetty.alpn.ALPN";
+        Class<?> negoClass = Class.forName(negoClassName);
+        Class<?> providerClass = Class.forName(negoClassName + "$Provider");
+        Class<?> clientProviderClass = Class.forName(negoClassName + "$ClientProvider");
+        Class<?> serverProviderClass = Class.forName(negoClassName + "$ServerProvider");
+        Method putMethod = negoClass.getMethod("put", SSLSocket.class, providerClass);
+        Method getMethod = negoClass.getMethod("get", SSLSocket.class);
+        Method removeMethod = negoClass.getMethod("remove", SSLSocket.class);
+        return new JdkWithJettyBootPlatform(sslContextClass,
+            putMethod, getMethod, removeMethod, clientProviderClass, serverProviderClass);
+      } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+      }
+
+      return new JdkPlatform(sslContextClass);
+    } catch (ClassNotFoundException ignored) {
     }
 
     return new Platform();
@@ -169,6 +195,7 @@ public class Platform {
   private static class Android extends Platform {
     private static final int MAX_LOG_LENGTH = 4000;
 
+    private final Class<?> sslParametersClass;
     private final OptionalMethod<Socket> setUseSessionTickets;
     private final OptionalMethod<Socket> setHostname;
 
@@ -180,9 +207,11 @@ public class Platform {
     private final OptionalMethod<Socket> getAlpnSelectedProtocol;
     private final OptionalMethod<Socket> setAlpnProtocols;
 
-    public Android(OptionalMethod<Socket> setUseSessionTickets, OptionalMethod<Socket> setHostname,
-        Method trafficStatsTagSocket, Method trafficStatsUntagSocket,
-        OptionalMethod<Socket> getAlpnSelectedProtocol, OptionalMethod<Socket> setAlpnProtocols) {
+    public Android(Class<?> sslParametersClass, OptionalMethod<Socket> setUseSessionTickets,
+        OptionalMethod<Socket> setHostname, Method trafficStatsTagSocket,
+        Method trafficStatsUntagSocket, OptionalMethod<Socket> getAlpnSelectedProtocol,
+        OptionalMethod<Socket> setAlpnProtocols) {
+      this.sslParametersClass = sslParametersClass;
       this.setUseSessionTickets = setUseSessionTickets;
       this.setHostname = setHostname;
       this.trafficStatsTagSocket = trafficStatsTagSocket;
@@ -207,6 +236,17 @@ public class Platform {
       }
     }
 
+    @Override public X509TrustManager trustManager(SSLSocketFactory sslSocketFactory) {
+      Object context = readFieldOrNull(sslSocketFactory, sslParametersClass, "sslParameters");
+      if (context == null) return null;
+
+      X509TrustManager x509TrustManager = readFieldOrNull(
+          context, X509TrustManager.class, "x509TrustManager");
+      if (x509TrustManager != null) return x509TrustManager;
+
+      return readFieldOrNull(context, X509TrustManager.class, "trustManager");
+    }
+
     @Override public void configureTlsExtensions(
         SSLSocket sslSocket, String hostname, List<Protocol> protocols) {
       // Enable SNI and session tickets.
@@ -217,7 +257,7 @@ public class Platform {
 
       // Enable ALPN.
       if (setAlpnProtocols != null && setAlpnProtocols.isSupported(sslSocket)) {
-        Object[] parameters = { concatLengthPrefixed(protocols) };
+        Object[] parameters = {concatLengthPrefixed(protocols)};
         setAlpnProtocols.invokeWithoutCheckedException(sslSocket, parameters);
       }
     }
@@ -268,18 +308,34 @@ public class Platform {
     }
   }
 
+  /** JDK 1.7 or better. */
+  private static class JdkPlatform extends Platform {
+    private final Class<?> sslContextClass;
+
+    public JdkPlatform(Class<?> sslContextClass) {
+      this.sslContextClass = sslContextClass;
+    }
+
+    @Override public X509TrustManager trustManager(SSLSocketFactory sslSocketFactory) {
+      Object context = readFieldOrNull(sslSocketFactory, sslContextClass, "context");
+      if (context == null) return null;
+      return readFieldOrNull(context, X509TrustManager.class, "trustManager");
+    }
+  }
+
   /**
    * OpenJDK 7+ with {@code org.mortbay.jetty.alpn/alpn-boot} in the boot class path.
    */
-  private static class JdkWithJettyBootPlatform extends Platform {
+  private static class JdkWithJettyBootPlatform extends JdkPlatform {
     private final Method putMethod;
     private final Method getMethod;
     private final Method removeMethod;
     private final Class<?> clientProviderClass;
     private final Class<?> serverProviderClass;
 
-    public JdkWithJettyBootPlatform(Method putMethod, Method getMethod, Method removeMethod,
-        Class<?> clientProviderClass, Class<?> serverProviderClass) {
+    public JdkWithJettyBootPlatform(Class<?> sslContextClass, Method putMethod, Method getMethod,
+        Method removeMethod, Class<?> clientProviderClass, Class<?> serverProviderClass) {
+      super(sslContextClass);
       this.putMethod = putMethod;
       this.getMethod = getMethod;
       this.removeMethod = removeMethod;
@@ -297,7 +353,7 @@ public class Platform {
       }
       try {
         Object provider = Proxy.newProxyInstance(Platform.class.getClassLoader(),
-            new Class[] { clientProviderClass, serverProviderClass }, new JettyNegoProvider(names));
+            new Class[] {clientProviderClass, serverProviderClass}, new JettyNegoProvider(names));
         putMethod.invoke(null, sslSocket, provider);
       } catch (InvocationTargetException | IllegalAccessException e) {
         throw new AssertionError(e);
@@ -329,8 +385,8 @@ public class Platform {
   }
 
   /**
-   * Handle the methods of ALPN's ClientProvider and ServerProvider
-   * without a compile-time dependency on those interfaces.
+   * Handle the methods of ALPN's ClientProvider and ServerProvider without a compile-time
+   * dependency on those interfaces.
    */
   private static class JettyNegoProvider implements InvocationHandler {
     /** This peer's supported protocols. */
@@ -390,5 +446,28 @@ public class Platform {
       result.writeUtf8(protocol.toString());
     }
     return result.readByteArray();
+  }
+
+  static <T> T readFieldOrNull(Object instance, Class<T> fieldType, String fieldName) {
+    for (Class<?> c = instance.getClass(); c != Object.class; c = c.getSuperclass()) {
+      try {
+        Field field = c.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        Object value = field.get(instance);
+        if (value == null || !fieldType.isInstance(value)) return null;
+        return fieldType.cast(value);
+      } catch (NoSuchFieldException ignored) {
+      } catch (IllegalAccessException e) {
+        throw new AssertionError();
+      }
+    }
+
+    // Didn't find the field we wanted. As a last gasp attempt, try to find the value on a delegate.
+    if (!fieldName.equals("delegate")) {
+      Object delegate = readFieldOrNull(instance, Object.class, "delegate");
+      if (delegate != null) return readFieldOrNull(delegate, fieldType, fieldName);
+    }
+
+    return null;
   }
 }

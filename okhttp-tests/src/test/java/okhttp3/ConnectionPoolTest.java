@@ -15,9 +15,6 @@
  */
 package okhttp3;
 
-import okhttp3.internal.RecordingOkAuthenticator;
-import okhttp3.internal.http.StreamAllocation;
-import okhttp3.internal.io.RealConnection;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.ProxySelector;
@@ -25,6 +22,10 @@ import java.net.Socket;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 import javax.net.SocketFactory;
+import okhttp3.internal.Internal;
+import okhttp3.internal.RecordingOkAuthenticator;
+import okhttp3.internal.http.StreamAllocation;
+import okhttp3.internal.io.RealConnection;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -32,11 +33,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class ConnectionPoolTest {
-  private final Runnable emptyRunnable = new Runnable() {
-    @Override public void run() {
-    }
-  };
-
   private final Address addressA = newAddress("a");
   private final Route routeA1 = newRoute(addressA);
   private final Address addressB = newAddress("b");
@@ -44,41 +40,45 @@ public final class ConnectionPoolTest {
   private final Address addressC = newAddress("c");
   private final Route routeC1 = newRoute(addressC);
 
+  static {
+    Internal.initializeInstanceForTests();
+  }
+
   @Test public void connectionsEvictedWhenIdleLongEnough() throws Exception {
     ConnectionPool pool = new ConnectionPool(Integer.MAX_VALUE, 100L, TimeUnit.NANOSECONDS);
-    pool.setCleanupRunnableForTest(emptyRunnable);
+    pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 50L);
 
     // Running at time 50, the pool returns that nothing can be evicted until time 150.
     assertEquals(100L, pool.cleanup(50L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
 
     // Running at time 60, the pool returns that nothing can be evicted until time 150.
     assertEquals(90L, pool.cleanup(60L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
 
     // Running at time 149, the pool returns that nothing can be evicted until time 150.
     assertEquals(1L, pool.cleanup(149L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
 
     // Running at time 150, the pool evicts.
     assertEquals(0, pool.cleanup(150L));
-    assertEquals(0, pool.getConnectionCount());
+    assertEquals(0, pool.connectionCount());
     assertTrue(c1.socket.isClosed());
 
     // Running again, the pool reports that no further runs are necessary.
     assertEquals(-1, pool.cleanup(150L));
-    assertEquals(0, pool.getConnectionCount());
+    assertEquals(0, pool.connectionCount());
     assertTrue(c1.socket.isClosed());
   }
 
   @Test public void inUseConnectionsNotEvicted() throws Exception {
     ConnectionPool pool = new ConnectionPool(Integer.MAX_VALUE, 100L, TimeUnit.NANOSECONDS);
-    pool.setCleanupRunnableForTest(emptyRunnable);
+    pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 50L);
     StreamAllocation streamAllocation = new StreamAllocation(pool, addressA);
@@ -86,62 +86,62 @@ public final class ConnectionPoolTest {
 
     // Running at time 50, the pool returns that nothing can be evicted until time 150.
     assertEquals(100L, pool.cleanup(50L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
 
     // Running at time 60, the pool returns that nothing can be evicted until time 160.
     assertEquals(100L, pool.cleanup(60L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
 
     // Running at time 160, the pool returns that nothing can be evicted until time 260.
     assertEquals(100L, pool.cleanup(160L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
   }
 
   @Test public void cleanupPrioritizesEarliestEviction() throws Exception {
     ConnectionPool pool = new ConnectionPool(Integer.MAX_VALUE, 100L, TimeUnit.NANOSECONDS);
-    pool.setCleanupRunnableForTest(emptyRunnable);
+    pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 75L);
     RealConnection c2 = newConnection(pool, routeB1, 50L);
 
     // Running at time 75, the pool returns that nothing can be evicted until time 150.
     assertEquals(75L, pool.cleanup(75L));
-    assertEquals(2, pool.getConnectionCount());
+    assertEquals(2, pool.connectionCount());
 
     // Running at time 149, the pool returns that nothing can be evicted until time 150.
     assertEquals(1L, pool.cleanup(149L));
-    assertEquals(2, pool.getConnectionCount());
+    assertEquals(2, pool.connectionCount());
 
     // Running at time 150, the pool evicts c2.
     assertEquals(0L, pool.cleanup(150L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
     assertTrue(c2.socket.isClosed());
 
     // Running at time 150, the pool returns that nothing can be evicted until time 175.
     assertEquals(25L, pool.cleanup(150L));
-    assertEquals(1, pool.getConnectionCount());
+    assertEquals(1, pool.connectionCount());
 
     // Running at time 175, the pool evicts c1.
     assertEquals(0L, pool.cleanup(175L));
-    assertEquals(0, pool.getConnectionCount());
+    assertEquals(0, pool.connectionCount());
     assertTrue(c1.socket.isClosed());
     assertTrue(c2.socket.isClosed());
   }
 
   @Test public void oldestConnectionsEvictedIfIdleLimitExceeded() throws Exception {
     ConnectionPool pool = new ConnectionPool(2, 100L, TimeUnit.NANOSECONDS);
-    pool.setCleanupRunnableForTest(emptyRunnable);
+    pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 50L);
     RealConnection c2 = newConnection(pool, routeB1, 75L);
 
     // With 2 connections, there's no need to evict until the connections time out.
     assertEquals(50L, pool.cleanup(100L));
-    assertEquals(2, pool.getConnectionCount());
+    assertEquals(2, pool.connectionCount());
     assertFalse(c1.socket.isClosed());
     assertFalse(c2.socket.isClosed());
 
@@ -150,7 +150,7 @@ public final class ConnectionPoolTest {
 
     // The third connection bounces the first.
     assertEquals(0L, pool.cleanup(100L));
-    assertEquals(2, pool.getConnectionCount());
+    assertEquals(2, pool.connectionCount());
     assertTrue(c1.socket.isClosed());
     assertFalse(c2.socket.isClosed());
     assertFalse(c3.socket.isClosed());
@@ -158,7 +158,7 @@ public final class ConnectionPoolTest {
 
   @Test public void leakedAllocation() throws Exception {
     ConnectionPool pool = new ConnectionPool(2, 100L, TimeUnit.NANOSECONDS);
-    pool.setCleanupRunnableForTest(emptyRunnable);
+    pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 0L);
     allocateAndLeakAllocation(pool, c1);
@@ -172,7 +172,7 @@ public final class ConnectionPoolTest {
 
   /** Use a helper method so there's no hidden reference remaining on the stack. */
   private void allocateAndLeakAllocation(ConnectionPool pool, RealConnection connection) {
-    StreamAllocation leak = new StreamAllocation(pool, connection.getRoute().address());
+    StreamAllocation leak = new StreamAllocation(pool, connection.route().address());
     leak.acquire(connection);
   }
 

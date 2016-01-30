@@ -15,12 +15,12 @@
  */
 package okhttp3.recipes;
 
+import java.io.File;
+import java.io.IOException;
 import okhttp3.Cache;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import java.io.File;
-import java.io.IOException;
 
 public final class CacheResponse {
   private final OkHttpClient client;
@@ -29,8 +29,9 @@ public final class CacheResponse {
     int cacheSize = 10 * 1024 * 1024; // 10 MiB
     Cache cache = new Cache(cacheDirectory, cacheSize);
 
-    client = new OkHttpClient();
-    client.setCache(cache);
+    client = new OkHttpClient.Builder()
+        .cache(cache)
+        .build();
   }
 
   public void run() throws Exception {

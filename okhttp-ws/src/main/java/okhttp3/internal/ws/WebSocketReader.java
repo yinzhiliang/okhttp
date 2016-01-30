@@ -15,12 +15,12 @@
  */
 package okhttp3.internal.ws;
 
-import okhttp3.MediaType;
-import okhttp3.ResponseBody;
-import okhttp3.ws.WebSocket;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.ProtocolException;
+import okhttp3.MediaType;
+import okhttp3.ResponseBody;
+import okhttp3.ws.WebSocket;
 import okio.Buffer;
 import okio.BufferedSource;
 import okio.Okio;
@@ -46,6 +46,7 @@ import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_BYTE_MAX;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_LONG;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_SHORT;
 import static okhttp3.internal.ws.WebSocketProtocol.toggleMask;
+import static okhttp3.internal.ws.WebSocketProtocol.validateCloseCode;
 
 /**
  * An <a href="http://tools.ietf.org/html/rfc6455">RFC 6455</a>-compatible WebSocket frame reader.
@@ -53,8 +54,11 @@ import static okhttp3.internal.ws.WebSocketProtocol.toggleMask;
 public final class WebSocketReader {
   public interface FrameCallback {
     void onMessage(ResponseBody body) throws IOException;
+
     void onPing(Buffer buffer);
+
     void onPong(Buffer buffer);
+
     void onClose(int code, String reason);
   }
 
@@ -88,11 +92,12 @@ public final class WebSocketReader {
 
   /**
    * Process the next protocol frame.
+   *
    * <ul>
-   * <li>If it is a control frame this will result in a single call to {@link FrameCallback}.</li>
-   * <li>If it is a message frame this will result in a single call to {@link
-   * FrameCallback#onMessage}. If the message spans multiple frames, each interleaved control
-   * frame will result in a corresponding call to {@link FrameCallback}.
+   *     <li>If it is a control frame this will result in a single call to {@link FrameCallback}.
+   *     <li>If it is a message frame this will result in a single call to {@link
+   *         FrameCallback#onMessage}. If the message spans multiple frames, each interleaved
+   *         control frame will result in a corresponding call to {@link FrameCallback}.
    * </ul>
    */
   public void processNextFrame() throws IOException {
@@ -192,12 +197,7 @@ public final class WebSocketReader {
             throw new ProtocolException("Malformed close payload length of 1.");
           } else if (bufferSize != 0) {
             code = buffer.readShort();
-            if (code < 1000 || code >= 5000) {
-              throw new ProtocolException("Code must be in range [1000,5000): " + code);
-            }
-            if ((code >= 1004 && code <= 1006) || (code >= 1012 && code <= 2999)) {
-              throw new ProtocolException("Code " + code + " is reserved and may not be used.");
-            }
+            validateCloseCode(code, false);
 
             reason = buffer.readUtf8();
           }

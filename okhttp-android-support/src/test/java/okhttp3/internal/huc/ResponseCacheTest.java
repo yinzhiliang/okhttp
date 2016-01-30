@@ -16,18 +16,6 @@
 
 package okhttp3.internal.huc;
 
-import okhttp3.AbstractResponseCache;
-import okhttp3.AndroidInternal;
-import okhttp3.AndroidShimResponseCache;
-import okhttp3.Headers;
-import okhttp3.OkHttpClient;
-import okhttp3.OkUrlFactory;
-import okhttp3.internal.Internal;
-import okhttp3.internal.SslContextBuilder;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
-import okhttp3.testing.RecordingHostnameVerifier;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
@@ -67,7 +55,20 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import okhttp3.AbstractResponseCache;
+import okhttp3.AndroidInternal;
+import okhttp3.AndroidShimResponseCache;
+import okhttp3.Headers;
+import okhttp3.OkHttpClient;
+import okhttp3.OkUrlFactory;
+import okhttp3.internal.Internal;
+import okhttp3.internal.InternalCache;
+import okhttp3.internal.SslContextBuilder;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.mockwebserver.SocketPolicy;
+import okhttp3.RecordingHostnameVerifier;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.GzipSink;
@@ -86,8 +87,8 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Tests the interaction between OkHttp and {@link ResponseCache}.
- * Based on okhttp3.CacheTest with changes for ResponseCache and HttpURLConnection.
+ * Tests the interaction between OkHttp and {@link ResponseCache}. Based on okhttp3.CacheTest with
+ * changes for ResponseCache and HttpURLConnection.
  */
 public final class ResponseCacheTest {
   @Rule public TemporaryFolder cacheRule = new TemporaryFolder();
@@ -96,29 +97,26 @@ public final class ResponseCacheTest {
 
   private HostnameVerifier hostnameVerifier = new RecordingHostnameVerifier();
   private SSLContext sslContext = SslContextBuilder.localhost();
-  private OkHttpClient client;
   private ResponseCache cache;
   private CookieManager cookieManager;
+  private OkUrlFactory urlFactory;
 
   @Before public void setUp() throws Exception {
     server.setProtocolNegotiationEnabled(false);
 
-    client = new OkHttpClient();
-
     cache = AndroidShimResponseCache.create(cacheRule.getRoot(), 10 * 1024 * 1024);
-    AndroidInternal.setResponseCache(new OkUrlFactory(client), cache);
+    urlFactory = new OkUrlFactory(new OkHttpClient());
+    AndroidInternal.setResponseCache(urlFactory, cache);
 
     cookieManager = new CookieManager();
-    CookieManager.setDefault(cookieManager);
   }
 
   @After public void tearDown() throws Exception {
-    CookieManager.setDefault(null);
     ResponseCache.setDefault(null);
   }
 
   private HttpURLConnection openConnection(URL url) {
-    return new OkUrlFactory(client).open(url);
+    return urlFactory.open(url);
   }
 
   /**
@@ -133,45 +131,45 @@ public final class ResponseCacheTest {
     // assertCached(false, 100);
     assertCached(false, 101);
     assertCached(false, 102);
-    assertCached(true,  200);
+    assertCached(true, 200);
     assertCached(false, 201);
     assertCached(false, 202);
-    assertCached(true,  203);
-    assertCached(true,  204);
+    assertCached(true, 203);
+    assertCached(true, 204);
     assertCached(false, 205);
     assertCached(false, 206); //Electing to not cache partial responses
     assertCached(false, 207);
-    assertCached(true,  300);
-    assertCached(true,  301);
-    assertCached(true,  302);
+    assertCached(true, 300);
+    assertCached(true, 301);
+    assertCached(true, 302);
     assertCached(false, 303);
     assertCached(false, 304);
     assertCached(false, 305);
     assertCached(false, 306);
-    assertCached(true,  307);
-    assertCached(true,  308);
+    assertCached(true, 307);
+    assertCached(true, 308);
     assertCached(false, 400);
     assertCached(false, 401);
     assertCached(false, 402);
     assertCached(false, 403);
-    assertCached(true,  404);
-    assertCached(true,  405);
+    assertCached(true, 404);
+    assertCached(true, 405);
     assertCached(false, 406);
     assertCached(false, 408);
     assertCached(false, 409);
     // the HTTP spec permits caching 410s, but the RI doesn't.
-    assertCached(true,  410);
+    assertCached(true, 410);
     assertCached(false, 411);
     assertCached(false, 412);
     assertCached(false, 413);
-    assertCached(true,  414);
+    assertCached(true, 414);
     assertCached(false, 415);
     assertCached(false, 416);
     assertCached(false, 417);
     assertCached(false, 418);
 
     assertCached(false, 500);
-    assertCached(true,  501);
+    assertCached(true, 501);
     assertCached(false, 502);
     assertCached(false, 503);
     assertCached(false, 504);
@@ -347,8 +345,10 @@ public final class ResponseCacheTest {
     server.enqueue(new MockResponse()
         .setBody("DEF"));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(hostnameVerifier);
+    urlFactory.setClient(urlFactory.client().newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build());
 
     HttpsURLConnection connection1 = (HttpsURLConnection) openConnection(server.url("/").url());
     assertEquals("ABC", readAscii(connection1));
@@ -363,10 +363,9 @@ public final class ResponseCacheTest {
   }
 
   /**
-   * We've had bugs where caching and cross-protocol redirects yield class
-   * cast exceptions internal to the cache because we incorrectly assumed that
-   * HttpsURLConnection was always HTTPS and HttpURLConnection was always HTTP;
-   * in practice redirects mean that each can do either.
+   * We've had bugs where caching and cross-protocol redirects yield class cast exceptions internal
+   * to the cache because we incorrectly assumed that HttpsURLConnection was always HTTPS and
+   * HttpURLConnection was always HTTP; in practice redirects mean that each can do either.
    *
    * https://github.com/square/okhttp/issues/214
    */
@@ -385,8 +384,10 @@ public final class ResponseCacheTest {
         .setResponseCode(HttpURLConnection.HTTP_MOVED_PERM)
         .addHeader("Location: " + server2.url("/").url()));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(hostnameVerifier);
+    urlFactory.setClient(urlFactory.client().newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build());
 
     HttpURLConnection connection1 = openConnection(server.url("/").url());
     assertEquals("ABC", readAscii(connection1));
@@ -767,7 +768,8 @@ public final class ResponseCacheTest {
   /**
    * Equivalent to {@code CacheTest.postInvalidatesCacheWithUncacheableResponse()} but demonstrating
    * that {@link ResponseCache} provides no mechanism for cache invalidation as the result of
-   * locally-made requests. In reality invalidation could take place from other clients at any time.
+   * locally-made requests. In reality invalidation could take place from other clients at any
+   * time.
    */
   @Test public void postInvalidatesCacheWithUncacheableResponse() throws Exception {
     // 1. seed the cache
@@ -1168,8 +1170,8 @@ public final class ResponseCacheTest {
   }
 
   /**
-   * For Last-Modified and Date headers, we should echo the date back in the
-   * exact format we were served.
+   * For Last-Modified and Date headers, we should echo the date back in the exact format we were
+   * served.
    */
   @Test public void retainServedDateFormat() throws Exception {
     // Serve a response with a non-standard date format that OkHttp supports.
@@ -1454,8 +1456,10 @@ public final class ResponseCacheTest {
     server.enqueue(new MockResponse()
         .setBody("B"));
 
-    client.setSslSocketFactory(sslContext.getSocketFactory());
-    client.setHostnameVerifier(hostnameVerifier);
+    urlFactory.setClient(urlFactory.client().newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory())
+        .hostnameVerifier(hostnameVerifier)
+        .build());
 
     URL url = server.url("/").url();
     HttpURLConnection connection1 = openConnection(url);
@@ -1465,23 +1469,6 @@ public final class ResponseCacheTest {
     HttpURLConnection connection2 = openConnection(url);
     connection2.setRequestProperty("Accept-Language", "en-US");
     assertEquals("A", readAscii(connection2));
-  }
-
-  @Test public void cachePlusCookies() throws Exception {
-    server.enqueue(new MockResponse()
-        .addHeader("Set-Cookie: a=FIRST; domain=" + server.getCookieDomain() + ";")
-        .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
-        .addHeader("Cache-Control: max-age=0")
-        .setBody("A"));
-    server.enqueue(new MockResponse()
-        .addHeader("Set-Cookie: a=SECOND; domain=" + server.getCookieDomain() + ";")
-        .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
-
-    URL url = server.url("/").url();
-    assertEquals("A", readAscii(openConnection(url)));
-    assertCookies(url, "a=FIRST");
-    assertEquals("A", readAscii(openConnection(url)));
-    assertCookies(url, "a=SECOND");
   }
 
   @Test public void getHeadersReturnsNetworkEndToEndHeaders() throws Exception {
@@ -1566,7 +1553,7 @@ public final class ResponseCacheTest {
     assertEquals(Arrays.asList(expectedCookies), actualCookies);
   }
 
-  @Test public void doNotCachePartialResponse() throws Exception  {
+  @Test public void doNotCachePartialResponse() throws Exception {
     assertNotCached(new MockResponse()
         .setResponseCode(HttpURLConnection.HTTP_PARTIAL)
         .addHeader("Date: " + formatDate(0, TimeUnit.HOURS))
@@ -1682,9 +1669,8 @@ public final class ResponseCacheTest {
   }
 
   /**
-   * @param delta the offset from the current date to use. Negative
-   * values yield dates in the past; positive values yield dates in the
-   * future.
+   * @param delta the offset from the current date to use. Negative values yield dates in the past;
+   * positive values yield dates in the future.
    */
   private String formatDate(long delta, TimeUnit timeUnit) {
     return formatDate(new Date(System.currentTimeMillis() + timeUnit.toMillis(delta)));
@@ -1750,9 +1736,8 @@ public final class ResponseCacheTest {
   }
 
   /**
-   * Shortens the body of {@code response} but not the corresponding headers.
-   * Only useful to test how clients respond to the premature conclusion of
-   * the HTTP body.
+   * Shortens the body of {@code response} but not the corresponding headers. Only useful to test
+   * how clients respond to the premature conclusion of the HTTP body.
    */
   private MockResponse truncateViolently(MockResponse response, int numBytesToKeep) {
     response.setSocketPolicy(SocketPolicy.DISCONNECT_AT_END);
@@ -1801,9 +1786,8 @@ public final class ResponseCacheTest {
   }
 
   /**
-   * Reads {@code count} characters from the stream. If the stream is
-   * exhausted before {@code count} characters can be read, the remaining
-   * characters are returned and the stream is closed.
+   * Reads {@code count} characters from the stream. If the stream is exhausted before {@code count}
+   * characters can be read, the remaining characters are returned and the stream is closed.
    */
   private String readAscii(URLConnection connection, int count) throws IOException {
     HttpURLConnection httpConnection = (HttpURLConnection) connection;
@@ -1848,8 +1832,8 @@ public final class ResponseCacheTest {
   // Android-added tests.
 
   /**
-   * Test that we can interrogate the response when the cache is being
-   * populated. http://code.google.com/p/android/issues/detail?id=7787
+   * Test that we can interrogate the response when the cache is being populated.
+   * http://code.google.com/p/android/issues/detail?id=7787
    */
   @Test public void responseCacheCallbackApis() throws Exception {
     final String body = "ABCDE";
@@ -1861,7 +1845,7 @@ public final class ResponseCacheTest {
         .addHeader("fgh: ijk")
         .setBody(body));
 
-    Internal.instance.setCache(client, new CacheAdapter(new AbstractResponseCache() {
+    setInternalCache(new CacheAdapter(new AbstractResponseCache() {
       @Override public CacheRequest put(URI uri, URLConnection connection) throws IOException {
         HttpURLConnection httpURLConnection = (HttpURLConnection) connection;
         assertEquals(server.url("/").url(), uri.toURL());
@@ -1889,7 +1873,7 @@ public final class ResponseCacheTest {
   /** Don't explode if the cache returns a null body. http://b/3373699 */
   @Test public void responseCacheReturnsNullOutputStream() throws Exception {
     final AtomicBoolean aborted = new AtomicBoolean();
-    Internal.instance.setCache(client, new CacheAdapter(new AbstractResponseCache() {
+    setInternalCache(new CacheAdapter(new AbstractResponseCache() {
       @Override public CacheRequest put(URI uri, URLConnection connection) {
         return new CacheRequest() {
           @Override public void abort() {
@@ -1919,7 +1903,7 @@ public final class ResponseCacheTest {
     String cachedContentString = "Hello";
     final byte[] cachedContent = cachedContentString.getBytes(StandardCharsets.US_ASCII);
 
-    Internal.instance.setCache(client, new CacheAdapter(new AbstractResponseCache() {
+    setInternalCache(new CacheAdapter(new AbstractResponseCache() {
       @Override
       public CacheResponse get(URI uri, String requestMethod,
           Map<String, List<String>> requestHeaders)
@@ -1973,6 +1957,7 @@ public final class ResponseCacheTest {
           @Override public InputStream getBody() throws IOException {
             return response.getBody();
           }
+
           @Override public Map<String, List<String>> getHeaders() throws IOException {
             return response.getHeaders();
           }
@@ -1987,7 +1972,7 @@ public final class ResponseCacheTest {
     server.enqueue(new MockResponse().setBody("ABC"));
     server.enqueue(new MockResponse().setBody("DEF"));
 
-    AndroidInternal.setResponseCache(new OkUrlFactory(client), new InsecureResponseCache(cache));
+    AndroidInternal.setResponseCache(urlFactory, new InsecureResponseCache(cache));
 
     HttpsURLConnection connection1 = (HttpsURLConnection) openConnection(server.url("/").url());
     connection1.setSSLSocketFactory(sslContext.getSocketFactory());
@@ -2006,7 +1991,7 @@ public final class ResponseCacheTest {
         .setBody("ABC"));
 
     final AtomicReference<Map<String, List<String>>> requestHeadersRef = new AtomicReference<>();
-    Internal.instance.setCache(client, new CacheAdapter(new AbstractResponseCache() {
+    setInternalCache(new CacheAdapter(new AbstractResponseCache() {
       @Override public CacheResponse get(URI uri, String requestMethod,
           Map<String, List<String>> requestHeaders) throws IOException {
         requestHeadersRef.set(requestHeaders);
@@ -2181,5 +2166,11 @@ public final class ResponseCacheTest {
     URLConnection connection2 = server.url("/").url().openConnection();
     assertFalse(connection2 instanceof HttpURLConnectionImpl);
     assertEquals("B", readAscii(connection2));
+  }
+
+  private void setInternalCache(InternalCache internalCache) {
+    OkHttpClient.Builder builder = urlFactory.client().newBuilder();
+    Internal.instance.setCache(builder, internalCache);
+    urlFactory.setClient(builder.build());
   }
 }
